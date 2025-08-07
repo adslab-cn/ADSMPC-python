@@ -8,7 +8,7 @@ import torch.optim as optim
 import torchvision
 import torchvision.transforms as transforms
 
-from NssMPC.config import base_path, NN_path
+from NssMPC.config import NN_path
 from data.AlexNet.Alexnet import AlexNet
 
 transform = transforms.Compose([
@@ -24,13 +24,16 @@ transform1 = transforms.Compose([
 
 device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
 
-trainset = torchvision.datasets.MNIST(root='data', train=True, download=True, transform=transform)
+trainset = torchvision.datasets.CIFAR10(root=NN_path, train=True, download=True,
+                                      transform=transform)
 
-trainloader = torch.utils.data.DataLoader(trainset, batch_size=128, shuffle=True, num_workers=0)
+trainloader = torch.utils.data.DataLoader(trainset, batch_size=100, shuffle=True,
+                                          num_workers=0)
 
-testset = torchvision.datasets.MNIST(root='data', train=False, download=True, transform=transform1)
-
-testloader = torch.utils.data.DataLoader(testset, batch_size=64, shuffle=False, num_workers=0)
+testset = torchvision.datasets.CIFAR10(root=NN_path,
+                                     train=False, download=True,
+                                     transform=transform1)
+testloader = torch.utils.data.DataLoader(testset, batch_size=1000, shuffle=False, num_workers=0)
 
 net = AlexNet()
 
@@ -62,12 +65,11 @@ for epoch in range(num_epochs):
 
 print("Finished Training")
 
-path = NN_path
-if not os.path.exists(path):
-    os.makedirs(path)
-torch.save(net.state_dict(), path + '/AlexNet_MNIST.pkl')
+if not os.path.exists(NN_path):
+    os.makedirs(NN_path)
+torch.save(net.state_dict(), NN_path + '/AlexNet_MNIST.pkl')
 
-net.load_state_dict(torch.load(path + '/AlexNet_MNIST.pkl'))
+net.load_state_dict(torch.load(NN_path + '/AlexNet_MNIST.pkl'))
 start_time = time.time()
 
 with torch.no_grad():

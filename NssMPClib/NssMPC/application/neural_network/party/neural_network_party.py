@@ -17,7 +17,6 @@ from NssMPC.secure_model.utils.param_provider import ParamProvider
 
 class NeuralNetworkCS(SemiHonestCS):
     """
-    一个基于客户端-服务器架构的神经网络类，继承自SemiHonestCS。它的主要功能是支持用于训练和推理的神经网络模型的安全多方计算，确保在保护数据隐私的环境中执行计算。
     A neural network class based on a client-server architecture, inherited from SemiHonestCS. It`s main
     function is to support secure multi-party computation of neural network
     models for training and inference, ensuring that calculations are performed in an environment that protects data
