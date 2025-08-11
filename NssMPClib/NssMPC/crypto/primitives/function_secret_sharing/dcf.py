@@ -101,4 +101,4 @@ class DCF:
         dcf_result = dcf_result + pow(-1, party_id) * (
                 convert_tensor(s_last) + t_last * keys.ex_cw_dcf)
 
-        return RingTensor(dcf_result.view(shape), x.dtype, x.device)
+        return RingTensor(dcf_result.view(shape+(dcf_result.size(-1),)), x.dtype, x.device)

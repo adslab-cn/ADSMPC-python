@@ -1,0 +1,32 @@
+{
+    "version": "0.2.0",
+    "configurations": [
+
+        {
+            "name": "Plan Keys: BERT-base",
+            "type": "debugpy",
+            "request": "launch",
+            "program": "${workspaceFolder}/utils/generate_model_plan.py",
+            "console": "integratedTerminal",
+            "args": [
+                "--model_name_or_path",
+                "bert-base-cased",
+                "--num_inferences",
+                "1",
+                "--batch_size",
+                "1",
+                "--seq_length",
+                "128"
+            ],
+            "justMyCode": true 
+        },
+        {
+            "name": "Python Debugger: Current File with Arguments",
+            "type": "debugpy",
+            "request": "launch",
+            "program": "${file}",
+            "console": "integratedTerminal",
+            "args": "${command:pickArgs}"
+        }
+    ]
+}

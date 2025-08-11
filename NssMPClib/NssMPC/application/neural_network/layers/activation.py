@@ -6,6 +6,7 @@ import torch
 
 from NssMPC.config import SCALE_BIT, GELU_TABLE_BIT
 from NssMPC.config.runtime import PartyRuntime
+from NssMPC.crypto.aux_parameter import SigmaDICFKey
 from NssMPC.crypto.aux_parameter.look_up_table_keys.gelu_key import GeLUKey
 from NssMPC.crypto.protocols.arithmetic_secret_sharing.semi_honest_functional import b2a
 
@@ -148,6 +149,45 @@ def _gelu_forward_gpu(x):
 
     return (relu_x - LookUp.eval(c, gelu_key.look_up_key, gelu_key.look_up_table)).reshape(shape)
 
+def _relu_select_eval(x_shift: RingTensor, s_shift, key, r_in_1, r_in_2, party):
+    shape = x_shift.shape
+    x_shift = x_shift.flatten()
+    return ArithmeticSecretSharing(RingTensor.where(s_shift, (party.party_id - r_in_1) * x_shift - r_in_2 + key.w
+                                                    , r_in_1 * x_shift + key.w - key.z).reshape(shape))
+
+def _relu_forward_gpu(x):
+    table_scale_bit = GELU_TABLE_BIT
+    shape = x.shape
+    x = x.flatten()
+
+    gelu_key = PartyRuntime.party.get_param(GeLUKey, x.numel())
+    dicf_key = PartyRuntime.party.get_param(SigmaDICFKey, x.numel())
+    sigma_key = gelu_key.sigma_key
+    sigma_key = dicf_key
+    select_lin_key = gelu_key.select_lin_key
+    select_key = gelu_key.select_key
+
+    #x_r_in = dicf_key.r_in
+    x_r_in = sigma_key.r_in
+    x_shift = ArithmeticSecretSharing(x_r_in) + x.flatten()
+    x_shift = x_shift.restore()
+
+
+    d = SigmaDICF.eval(x_shift, sigma_key, PartyRuntime.party.party_id)
+
+    d = b2a(d, PartyRuntime.party)
+
+    d_shift = ArithmeticSecretSharing(select_lin_key.d) + d.flatten()
+    d_shift = d_shift.restore()
+
+    s_shift = d_shift % 2
+    s_shift.bit_len = d_shift.bit_len
+    relu_x = _relu_select_eval(x_shift, s_shift, select_key, select_lin_key.d, x_r_in, PartyRuntime.party)
+    relu_x.dtype = x.dtype
+    # temp = relu_x.restore()
+    # print(temp.convert_to_real_field())
+    return relu_x.reshape(shape)
+
 
 class SecReLU(torch.nn.Module):
     """
@@ -227,6 +267,29 @@ class SecGELU(torch.nn.Module):
             return _gelu_forward_cpu(x)
         else:
             return _gelu_forward_gpu(x)
+
+class SecReLU(torch.nn.Module):
+    """
+    * The implementation of this class is mainly based on the `paper Sigma <https://eprint.iacr.org/2023/1269.pdf>`_.
+
+    A safe GeLU activation function is implemented.
+
+    .. math::
+
+        \text{GELU}(x) = x \cdot P(X \leq x) = x \cdot \Phi(x)
+
+    .. note::
+        "approximate": used to specify the approximation method for GeLU, defaulting to 'none', but not currently used in the implementation.
+
+    Call the parent class constructor super(SecGeLU, self).__init__() to initialize the base module.
+    """
+
+    def __init__(self, approximate='none'):
+        super(SecReLU, self).__init__()
+
+    def forward(self, x):
+        assert isinstance(x, ArithmeticSecretSharing), f"unsupported data type(s) for GeLU: {type(x)}"
+        return _relu_forward_gpu(x)
 
 
 def _SecGELU(x):
