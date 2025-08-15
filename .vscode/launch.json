@@ -11,6 +11,7 @@
             "--model_name_or_path", "andeskyl/bert-base-cased-qnli",
             "--task_name", "qnli",
             "--len_data", "128",
+            "--num_data", "12",
             "--max_length", "128",
             "--comp",
             "--per_device_eval_batch_size", "1",
@@ -32,7 +33,7 @@
             "name": "Plan Keys: BERT-base",
             "type": "debugpy",
             "request": "launch",
-            "program": "${workspaceFolder}/utils/generate_model_plan.py",
+            "program": "${workspaceFolder}/SHAFT/crypten/utils/generate_model_plan.py",
             "console": "integratedTerminal",
             "args": [
                 "--model_name_or_path",
@@ -44,7 +45,12 @@
                 "--seq_length",
                 "128"
             ],
-            "justMyCode": true 
+            "justMyCode": true ,
+            "env": {
+                // --- 关键添加 ---
+                // 告诉 Python 解释器，在项目的根目录 (ADSMPC-python) 下去查找模块
+                "PYTHONPATH": "${workspaceFolder}"
+            }
         },
         {
             "name": "Python Debugger: Current File with Arguments",
