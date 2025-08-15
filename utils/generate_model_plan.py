@@ -103,7 +103,7 @@ def _topological_sort(graph_dict, start_nodes):
     return sorted_nodes
 
 
-def plan_and_generate_relu_keys(pytorch_model, dummy_input, num_inferences=1):
+def plan_and_generate_relu_keys(pytorch_model, dummy_input, key_type, num_inferences=1):
     """
     【修正版】能够正确处理多输入模型（如 BERT）的规划和密钥生成。
     """
@@ -154,7 +154,7 @@ def plan_and_generate_relu_keys(pytorch_model, dummy_input, num_inferences=1):
     # 获取正确的计算顺序
     nodes_in_order = _topological_sort(crypten_graph._graph, crypten_graph.input_names)
     print(f"    ...Topological sort complete. Found {len(nodes_in_order)} computation nodes.")
-
+    keys = {}
     for node_name in nodes_in_order:
         module_instance = crypten_graph._modules[node_name]
         input_names = crypten_graph._graph.get(node_name, [])
@@ -165,7 +165,7 @@ def plan_and_generate_relu_keys(pytorch_model, dummy_input, num_inferences=1):
         # 这里我们做一个简化：假设大多数模块是单输入的
         # 对于 Add 等多输入模块，需要特殊处理
         try:
-            current_input_shape = tensor_shapes[input_names[0]] 
+            current_input_shape = tensor_shapes[input_names[0]]
             output_shape = current_input_shape # 简化推断
             tensor_shapes[node_name] = output_shape
         except KeyError:
@@ -175,24 +175,31 @@ def plan_and_generate_relu_keys(pytorch_model, dummy_input, num_inferences=1):
             num_keys = torch.prod(torch.tensor(current_input_shape)).item()
             manifest_item = {
                 "layer_name": node_name,
-                "op_type": FastSecNetReLUKey,
+                "op_type": key_type,
                 "shape": current_input_shape,
                 "count": num_keys
             }
             resource_manifest.append(manifest_item)
-            print(f"    - Found compatible layer '{node_name}', requires {num_keys} keys for shape {current_input_shape}.")
+            keys[node_name] = key_type.gen(num_keys)
+            print(f"    - Found compatible layer '{node_name}', generated a keys for shape {current_input_shape}.")
     print("    ...Manifest created.")
-    print("[3/3] Generating and saving keys based on the manifest...")
-    total_keys_to_generate = sum(item['count'] for item in resource_manifest if item['op_type'] == FastSecNetReLUKey) * num_inferences
-    if total_keys_to_generate > 0:
-        # 假设 FastSecNetReLUKey.gen 的第一个参数是数量
-        FastSecNetReLUKey.gen_and_save(total_keys_to_generate, "relu_fastsecnet_keys")
-        data_path = f"{param_path}FastSecNetReLUKey/"
+    print("[3/3] Saving keys and the manifest...")
+    if len(resource_manifest) > 0:
+        data_path = f"{param_path}{key_type.__name__}/"
         os.makedirs(data_path, exist_ok=True)
-        manifest_path = os.path.join(data_path, "relu_fastsecnet_keys_manifest.pkl")
+        saved_name = f"relu_{key_type.__name__}"
+        key0_path = os.path.join(data_path, f"{saved_name}_0.pkl")
+        key1_path = os.path.join(data_path, f"{saved_name}_1.pkl")
+        keys_0 = {item: keys[item][0] for item in keys}
+        keys_1 = {item: keys[item][1] for item in keys}
+        with open(key0_path, 'wb') as f:
+            pickle.dump(keys_0, f)
+        with open(key1_path, 'wb') as f:
+            pickle.dump(keys_1, f)
+        manifest_path = os.path.join(data_path, f"{saved_name}_manifest.pkl")
         with open(manifest_path, 'wb') as f:
             pickle.dump(resource_manifest, f)
-        print(f"    ...{total_keys_to_generate} FSS-ReLU keys and manifest saved to '{data_path}'.")
+        print(f"    ...{len(keys)} {key_type.__name__} and manifest saved to '{data_path}'.")
     else:
         print("    ...No layers requiring FSS keys were found.")
     print("\n--- Dummy Run and Key Generation Finished Successfully! ---")
@@ -252,6 +259,7 @@ def main():
     plan_and_generate_relu_keys(
         pytorch_model, 
         dummy_input, 
+        FastSecNetReLUKey,
         num_inferences=args.num_inferences
     )
 

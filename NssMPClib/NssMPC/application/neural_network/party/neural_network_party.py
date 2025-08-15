@@ -69,7 +69,6 @@ class NeuralNetworkCS(SemiHonestCS):
         if self.type == 'server':
             # 模型提供方
             num = self.receive().item()
-
             if DEBUG_LEVEL != 2:
                 dummy_input = self.receive()
                 mat_beaver_lists = gen_mat_beaver(dummy_input=dummy_input.to('cpu'), model=inputs, num_of_triples=num)

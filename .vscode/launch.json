@@ -1,7 +1,33 @@
 {
     "version": "0.2.0",
     "configurations": [
-
+        {
+        "name": "Run GLUE Private",
+        "type": "debugpy",
+        "request": "launch",
+        "program": "${workspaceFolder}/SHAFT/examples/text-classification/run_glue_private.py",
+        "console": "integratedTerminal",
+        "args": [
+            "--model_name_or_path", "andeskyl/bert-base-cased-qnli",
+            "--task_name", "qnli",
+            "--len_data", "128",
+            "--max_length", "128",
+            "--comp",
+            "--per_device_eval_batch_size", "1",
+            "--output_dir", "eval_private/qnli/"
+        ],
+        "justMyCode": true 
+        },
+        {
+            "name": "Run Test",
+            "type": "debugpy",
+            "request": "launch",
+            "program": "${workspaceFolder}/test/Test.py",
+            "console": "integratedTerminal",
+            "args": [
+            ],
+            "justMyCode": true 
+        },
         {
             "name": "Plan Keys: BERT-base",
             "type": "debugpy",

@@ -12,7 +12,7 @@ class ParamProvider:
     它的行为模式与 NssMPClib 中的 ParamProvider 非常相似。
     """
 
-    def __init__(self, param_type, party_id, saved_name):
+    def __init__(self, param_type, party_id, saved_name,data_path):
         """
         初始化 Provider。
 
@@ -32,13 +32,12 @@ class ParamProvider:
         self.ptr = 0  # 消耗指针
 
         # 在初始化时就直接加载
-        self._load_params()
+        self._load_params(data_path)
 
-    def _load_params(self):
+    def _load_params(self,data_path):
         """
         从磁盘加载完整的、批处理过的参数文件。
-        """
-        data_path = cfg.get_data_path()  # e.g., '~/.crypten/data/'
+        """# e.g., '~/.crypten/data/'
         file_name = f"{self.saved_name}_{self.party_id}.pkl"
         file_path = os.path.join(data_path, file_name)
 
