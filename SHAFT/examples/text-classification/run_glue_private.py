@@ -19,6 +19,7 @@
 import argparse
 import json
 import logging
+import multiprocessing
 import os
 import time
 
@@ -367,22 +368,35 @@ def main():
 
     rank = ct.communicator.get().get_rank()
 
-    # 实例化 Provider，它会自动从磁盘加载密钥
-    fss_relu_provider = ParamProvider(
-        param_type=type({}),
-        party_id=rank,
-        saved_name=f"relu_{FastSecNetReLUKey.__name__}",  # 与离线生成时使用的名字匹配
-        data_path="/home/joker/.NssMPClib/data/64/aux_parameters/FastSecNetReLUKey/"
-    )
-    ct.communicator.get().add_provider("FSS_ReLU", fss_relu_provider)
 
     dummy = torch.zeros_like(model.dummy_inputs["input_ids"])
     # dummy_ids = torch.zeros((1,128))
     # dummy_mask = torch.ones((1,128),dtype=torch.long)
     # dummy_token_ids = torch.zeros((1,128),dtype=torch.long)
-    # 定义我们想要的形状
+    #if rank == 0:
+        #    定义我们想要的形状
+        # batch_size = 1
+        # seq_length = 11
+        # vocab_size = 305  # BERT-base-cased 的标准词汇表大小
+
+        # # --- 核心代码 ---
+
+        # # 1. 创建 input_ids: 必须是 torch.long 类型
+        # dummy_input_ids = torch.randint(0, vocab_size, (batch_size, seq_length), dtype=torch.long)
+
+        # # 2. 创建 attention_mask: 必须是 torch.long 类型
+        # dummy_attention_mask = torch.ones(batch_size, seq_length, dtype=torch.long)
+
+        # # 3. 创建 token_type_ids: 必须是 torch.long 类型
+        # dummy_token_type_ids = torch.zeros(batch_size, seq_length, dtype=torch.long)
+
+        # # 4. 将它们打包成一个元组
+        # dummy_input_tuple = (dummy_input_ids, dummy_attention_mask, dummy_token_type_ids)
+        # from crypten.utils.generate_model_plan import plan_and_generate_keys_with_hooks
+        # plan_and_generate_keys_with_hooks(model,dummy_input_tuple)
+
     batch_size = 1
-    seq_length = 128
+    seq_length = 4
     vocab_size = 305  # BERT-base-cased 的标准词汇表大小
 
     # --- 核心代码 ---
@@ -400,20 +414,54 @@ def main():
     dummy_input_tuple = (dummy_input_ids, dummy_attention_mask, dummy_token_type_ids)
     from crypten.utils.generate_model_plan import plan_and_generate_keys_with_hooks
     plan_and_generate_keys_with_hooks(model,dummy_input_tuple)
+    print(f"Rank {rank} is waiting at the barrier...")
+    ct.communicator.get().barrier()
+    print(f"Rank {rank} has passed the barrier.")
+    # 实例化 Provider，它会自动从磁盘加载密钥
+    fss_relu_provider = ParamProvider(
+        param_type=type({}),
+        party_id=rank,
+        saved_name=f"relu_{FastSecNetReLUKey.__name__}",  # 与离线生成时使用的名字匹配
+        data_path="/home/joker/.NssMPClib/data/64/aux_parameters/FastSecNetReLUKey/"
+    )
+    ct.communicator.get().add_provider("FSS_ReLU", fss_relu_provider)
     private_model = ct.nn.from_pytorch(model, (dummy, dummy, dummy)).encrypt().to(device)
-
     model.eval()
     samples_seen = 0
     for step, batch in enumerate(eval_dataloader):
         if args.len_data > 0 and batch["input_ids"].shape[1] != args.len_data:
             continue
+        dummy_input_ids = torch.randint(
+            low=0, 
+            high=vocab_size, 
+            size=(batch_size, seq_length), 
+            dtype=torch.long, 
+            device=device
+        )
 
-        inputs_enc = ct.cryptensor(batch["input_ids"]).to(device)
-        attention_mask_enc = ct.cryptensor(batch["attention_mask"]).to(device)
-        token_type_enc = ct.cryptensor(batch["token_type_ids"]).to(device)
+        # 2. 重新生成 dummy_attention_mask (最简单的方式是全1)
+        dummy_attention_mask = torch.ones(
+            (batch_size, seq_length), 
+            dtype=torch.long, 
+            device=device
+        )
+
+        # 3. 重新生成 dummy_token_type_ids (最简单的方式是全0)
+        dummy_token_type_ids = torch.zeros(
+            (batch_size, seq_length), 
+            dtype=torch.long, 
+            device=device
+        )
+        #inputs_enc = ct.cryptensor(batch["input_ids"]).to(device)
+        #attention_mask_enc = ct.cryptensor(batch["attention_mask"]).to(device)
+        #token_type_enc = ct.cryptensor(batch["token_type_ids"]).to(device)
+        inputs_enc = ct.cryptensor(dummy_input_ids).to(device)
+        attention_mask_enc = ct.cryptensor(dummy_attention_mask).to(device)
+        token_type_enc = ct.cryptensor(dummy_token_type_ids).to(device)
 
         with ct.no_grad():
             outputs_enc = private_model(inputs_enc, attention_mask_enc, token_type_enc)
+            #outputs_enc = private_model(dummy_input_ids, dummy_attention_mask, dummy_token_type_ids)
 
         outputs = outputs_enc.get_plain_text().cpu()
 

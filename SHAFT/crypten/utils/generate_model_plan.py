@@ -95,14 +95,15 @@ def plan_and_generate_keys_with_hooks(pytorch_model, dummy_input, num_inferences
     del crypten_model 
     torch.cuda.empty_cache() 
     print(f"    ...Manifest created with {len(manifest)} entries.")
-    print("[3/3] Generating and saving keys based on the manifest...")
+    print("[3/3] Saving keys based on the manifest...")
     keys = {}
     for item in manifest:
         layer_name = item['layer_name']
         count = item['count'] * num_inferences
         if "Softmax" in layer_name:
             count *= 2
-        keys[layer_name] = FastSecNetReLUKey.gen(count,device="cpu")
+        keys[layer_name] = FastSecNetReLUKey.gen(count,RingTensor.random(shape=(1,), dtype='float', device='cpu'),device="cpu")
+        keys[layer_name] = FastSecNetReLUKey.gen(count,RingTensor([1000.], device='cpu'),device="cpu")
     if len(manifest) > 0:
         data_path = f"{param_path}{FastSecNetReLUKey.__name__}/"
         os.makedirs(data_path, exist_ok=True)
@@ -371,5 +372,3 @@ def old_main():
         num_inferences=args.num_inferences
     )
 
-if __name__ == "__main__":
-    main()
