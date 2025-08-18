@@ -11,7 +11,6 @@ from transformers import AutoModelForSequenceClassification, AutoConfig
 # 导入您的 CrypTen/SHAFT 代码
 import crypten
 # 确保 crypten.__file__ 指向的是您修改过的版本
-print("正在使用的 crypten 模块位于:", crypten.__file__)
 
 from crypten.config import cfg
 from crypten.nn.module import Embedding, LayerNormalization, MatMul, ReLUFastSecNet, GELU, SiLU, Softmax # 导入您的自定义模块
@@ -124,14 +123,7 @@ def plan_and_generate_keys_with_hooks(pytorch_model, dummy_input, num_inferences
         print("    ...No layers requiring FSS keys were found.")
     print("\n--- Dummy Run and Key Generation Finished Successfully! ---")
 
-def main():
-    # ... (加载 pytorch_model, 创建 dummy_input) ...
 
-    # 1. 调用新的规划函数
-    manifest = plan_and_generate_keys_with_hooks(pytorch_model, dummy_input)
-    
-    # 2. 根据 manifest 生成密钥
-    # ... (这部分逻辑和之前一样，遍历 manifest，计算总数，调用 gen_and_save) ...
 def _topological_sort(graph_dict, start_nodes):
     """
     一个健壮的拓扑排序实现，专门用于处理 CrypTen 的计算图。

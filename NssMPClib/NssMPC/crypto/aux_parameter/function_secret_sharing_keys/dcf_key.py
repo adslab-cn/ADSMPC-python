@@ -48,7 +48,7 @@ class DCFKey(Parameter):
         self.size = 0
 
     @staticmethod
-    def gen(num_of_keys, alpha, beta):
+    def gen(num_of_keys, alpha, beta, device = None):
         """
         Generate DCF keys.
 
@@ -68,12 +68,14 @@ class DCFKey(Parameter):
         :rtype: Tuple[DCFKey, DCFKey]
 
         """
+        if not device:
+            device = DEVICE
         seed_0 = torch.randint(-HALF_RING, HALF_RING - 1, [num_of_keys, LAMBDA // BIT_LEN], dtype=data_type,
-                               device=DEVICE)
+                               device=device)
         seed_1 = torch.randint(-HALF_RING, HALF_RING - 1, [num_of_keys, LAMBDA // BIT_LEN], dtype=data_type,
-                               device=DEVICE)
+                               device=device)
 
-        prg = PRG(PRG_TYPE, device=DEVICE)
+        prg = PRG(PRG_TYPE, device=device)
         prg.set_seeds(seed_0)
         s_0_0 = prg.bit_random_tensor(LAMBDA)
         prg.set_seeds(seed_1)
@@ -88,10 +90,10 @@ class DCFKey(Parameter):
         s_last_0 = s_0_0
         s_last_1 = s_0_1
 
-        t_last_0 = torch.zeros(num_of_keys, 1, dtype=data_type, device=DEVICE)
-        t_last_1 = torch.ones(num_of_keys, 1, dtype=data_type, device=DEVICE)
+        t_last_0 = torch.zeros(num_of_keys, 1, dtype=data_type, device=device)
+        t_last_1 = torch.ones(num_of_keys, 1, dtype=data_type, device=device)
 
-        v_a = torch.zeros((num_of_keys, 1), dtype=data_type, device=DEVICE)
+        v_a = torch.zeros((num_of_keys, 1), dtype=data_type, device=device)
 
         for i in range(alpha.bit_len):
             s_l_0, v_l_0, t_l_0, s_r_0, v_r_0, t_r_0 = CW.gen_dcf_cw(prg, s_last_0, LAMBDA)
