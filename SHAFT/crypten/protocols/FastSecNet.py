@@ -12,7 +12,7 @@ class FastSecNetReLUKey(Parameter):
         self.r_ss = r_ss
         self.b_ss = b_ss
     @staticmethod
-    def gen(num_of_keys, alpha = RingTensor([1000.]), device="cpu"):
+    def gen(num_of_keys, alpha, device="cpu"):
         #b = RingTensor.stack([RingTensor.ones_like(alpha),alpha],dim=0)
         b = RingTensor.convert_to_ring(torch.Tensor([1, -1 * alpha.convert_to_real_field()[0].item()],device=device))
         dcf_key0,dcf_key1 =  DCFKey.gen(num_of_keys, alpha, -1 * b,device=device)
