@@ -1,0 +1,16 @@
+{
+    "version": "2.0.0",
+    "tasks": [
+        {
+            "label": "setProxyForWSL", // 任务的名字，可以自定义
+            "type": "shell", // 任务类型是执行 shell 命令
+            "command": "export HTTPS_PROXY=\"http://127.0.0.1:11809\";  export HTTP_PROXY=\"http://127.0.0.1:11809\";export ALL_PROXY=\"socks5://127.0.0.1:11808\";git config --global http.proxy \"socks5://127.0.0.1:11808\";git config --global https.proxy \"socks5://127.0.0.1:11808\";", // 【核心】要执行的命令
+            "problemMatcher": [],
+            "presentation": {
+                "reveal": "silent", // 不会弹出新的终端窗口
+                "panel": "shared",
+                "focus": false
+            }
+        }
+    ]
+}

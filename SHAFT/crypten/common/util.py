@@ -14,9 +14,6 @@ import numpy as np
 import torch
 from crypten.cuda import CUDALongTensor
 
-from crypten.nn.module import ReLUFastSecNet
-from crypten.protocols import FastSecNetReLUKey
-
 
 def count_wraps(share_list):
     """Computes the number of overflows or underflows in a set of shares

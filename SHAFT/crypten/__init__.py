@@ -606,9 +606,11 @@ def load_cache():
 def fill_cache():
     crypten.mpc.get_default_provider().fill_cache()
 
-
+from .protocols import FastSecNetReLU,FastSecNetReLUKey
 # expose classes and functions in package:
 __all__ = [
+    "FastSecNetReLUKey",
+    "FastSecNetReLU",
     "CrypTensor",
     "no_grad",
     "enable_grad",

@@ -102,8 +102,9 @@ def plan_and_generate_keys_with_hooks(pytorch_model, dummy_input, num_inferences
         count = item['count'] * num_inferences
         if "Softmax" in layer_name:
             count *= 2
-        keys[layer_name] = FastSecNetReLUKey.gen(count,RingTensor.random(shape=(1,), dtype='float', device='cpu'),device="cpu")
-        keys[layer_name] = FastSecNetReLUKey.gen(count,RingTensor([1000.], device='cpu'),device="cpu")
+        #keys[layer_name] = FastSecNetReLUKey.gen(count,RingTensor.random(shape=(1,), dtype='float', device='cpu'),device="cpu")
+        #keys[layer_name] = FastSecNetReLUKey.gen(count,RingTensor([1000.], device='cpu'),device="cpu")
+        keys[layer_name] = FastSecNetReLUKey.gen(count,RingTensor.convert_to_ring(torch.tensor([1000.], device='cpu')),device="cpu")
     if len(manifest) > 0:
         data_path = f"{param_path}{FastSecNetReLUKey.__name__}/"
         os.makedirs(data_path, exist_ok=True)

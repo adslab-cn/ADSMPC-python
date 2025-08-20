@@ -9,6 +9,7 @@
 
 import math
 
+from NssMPC.crypto.aux_parameter.function_secret_sharing_keys.dcf_key import DCFKey
 import torch
 import crypten as ct
 from crypten.config import cfg
@@ -535,21 +536,33 @@ def _diff_silu(x):
     return torch.sign(x) * (torch.nn.functional.silu(x) - torch.nn.functional.relu(x))
 
 def relu_fastsecnet(self):
-    plain_text = self.get_plain_text()
-    #print(plain_text)
-    current_communicator = ct.communicator.get()
-    my_rank = current_communicator.get_rank()
+    my_rank = ct.communicator.get().get_rank()
     provider = ct.communicator.get().get_provider("FSS_ReLU")
     keys_for_this_layer = provider.get_parameters(1)[0]
-    x_ss = ArithmeticSecretSharing(RingTensor(self.data,dtype="float"))
-    res = FastSecNetReLU.eval(ArithmeticSecretSharing(RingTensor(self.data,dtype="float")), keys_for_this_layer,my_rank)
-    #TODO Joker need work here
-    from crypten.mpc.mpc import MPCTensor
-    from crypten.mpc.ptype import ptype
-    encrypted_tensor = MPCTensor(res.ring_tensor.convert_to_real_field().to("cuda"),src=my_rank,ptype = ptype.arithmetic)
-    plain_text = encrypted_tensor.get_plain_text()
-    #print(plain_text)
-    return encrypted_tensor
+    t = RingTensor([10.])
+    t.tensor = self.share
+    t.dtype = "float"
+    x_ss = ArithmeticSecretSharing(t)
+    res = FastSecNetReLU.eval(x_ss, keys_for_this_layer, my_rank)
+    temp = res.get_plain_text()
+    print(temp)
+    return res.to(self.device)
+
+    # plain_text = self.get_plain_text()
+    # #print(plain_text)
+    # current_communicator = ct.communicator.get()
+    # my_rank = current_communicator.get_rank()
+    # provider = ct.communicator.get().get_provider("FSS_ReLU")
+    # keys_for_this_layer = provider.get_parameters(1)[0]
+    # x_ss = ArithmeticSecretSharing(RingTensor(self.data,dtype="float"))
+    # res = FastSecNetReLU.eval(ArithmeticSecretSharing(RingTensor(self.data,dtype="float")), keys_for_this_layer,my_rank)
+    # #TODO Joker need work here
+    # from crypten.mpc.mpc import MPCTensor
+    # from crypten.mpc.ptype import ptype
+    # encrypted_tensor = MPCTensor(res.ring_tensor.convert_to_real_field().to("cuda"),src=my_rank,ptype = ptype.arithmetic)
+    # plain_text = encrypted_tensor.get_plain_text()
+    # #print(plain_text)
+    # return encrypted_tensor
 def relu(self, approximate="logic_relu", mode='secure'):
     if mode == "shape_inference":
         return self
@@ -670,7 +683,7 @@ def softmax(self, dim,**kwargs):
 
         if clip:
             # clip the input within the range [lower, upper] for numerical stability
-            diff = ct.cat([self - upper, lower - self]).relu(approximate ="fastsecnet").split(self.shape[0])#.split([1,1])
+            diff = ct.cat([self - upper, lower - self]).relu(approximate ="fastsecnet").to(self.device).split(self.shape[0])#.split([1,1])
             self += diff[1] - diff[0]
 
         # initialize ode approximation

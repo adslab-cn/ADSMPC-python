@@ -413,7 +413,7 @@ def main():
     # 4. 将它们打包成一个元组
     dummy_input_tuple = (dummy_input_ids, dummy_attention_mask, dummy_token_type_ids)
     from crypten.utils.generate_model_plan import plan_and_generate_keys_with_hooks
-    plan_and_generate_keys_with_hooks(model,dummy_input_tuple)
+    #plan_and_generate_keys_with_hooks(model,dummy_input_tuple)
     print(f"Rank {rank} is waiting at the barrier...")
     ct.communicator.get().barrier()
     print(f"Rank {rank} has passed the barrier.")

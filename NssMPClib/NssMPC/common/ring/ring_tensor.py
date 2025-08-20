@@ -8,7 +8,8 @@ import torch
 import torch.nn.functional as F
 from NssMPC.common.utils import cuda_matmul
 from NssMPC.config import BIT_LEN, DEVICE, data_type, DTYPE_MAPPING, DTYPE_SCALE_MAPPING, HALF_RING
-
+from crypten.cuda.cuda_tensor import CUDALongTensor
+import crypten as ct
 
 class RingTensor(object):
     # TODO 运算符重载在不支持类型时应 return NotImplemented 否则不会去检查右值是否支持了此运算
@@ -35,8 +36,9 @@ class RingTensor(object):
         self.tensor = None
 
     @__init__.register(torch.Tensor)
+    @__init__.register(CUDALongTensor)
     def from_tensor(self, tensor, dtype='int', device=DEVICE, bit_len=BIT_LEN):
-        self.tensor = tensor.to(device) if tensor.device.type != device else tensor
+        self.tensor = tensor.to(device)
         self.dtype = dtype
         self.bit_len = bit_len
 

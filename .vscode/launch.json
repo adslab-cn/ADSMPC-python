@@ -7,6 +7,7 @@
         "request": "launch",
         "program": "${workspaceFolder}/SHAFT/examples/text-classification/run_glue_private.py",
         "console": "integratedTerminal",
+        "preLaunchTask": "setProxyForWSL",
         "args": [
             "--model_name_or_path", "andeskyl/bert-base-cased-qnli",
             "--task_name", "qnli",
@@ -24,6 +25,16 @@
             "type": "debugpy",
             "request": "launch",
             "program": "${workspaceFolder}/test/Test.py",
+            "console": "integratedTerminal",
+            "args": [
+            ],
+            "justMyCode": true 
+        },
+                {
+            "name": "Run UnionTest",
+            "type": "debugpy",
+            "request": "launch",
+            "program": "${workspaceFolder}/test/UnionTest.py",
             "console": "integratedTerminal",
             "args": [
             ],
