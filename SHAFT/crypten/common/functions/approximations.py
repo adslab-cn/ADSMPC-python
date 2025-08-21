@@ -536,8 +536,11 @@ def _diff_silu(x):
     return torch.sign(x) * (torch.nn.functional.silu(x) - torch.nn.functional.relu(x))
 
 def relu_fastsecnet(self):
-    my_rank = ct.communicator.get().get_rank()
-    provider = ct.communicator.get().get_provider("FSS_ReLU")
+    temp = self.get_plain_text()
+    print("self:"+str(temp))
+    comm = ct.communicator.get()
+    my_rank = comm.get_rank()
+    provider = comm.get_provider("FSS_ReLU")
     keys_for_this_layer = provider.get_parameters(1)[0]
     t = RingTensor([10.])
     t.tensor = self.share
@@ -545,7 +548,7 @@ def relu_fastsecnet(self):
     x_ss = ArithmeticSecretSharing(t)
     res = FastSecNetReLU.eval(x_ss, keys_for_this_layer, my_rank)
     temp = res.get_plain_text()
-    print(temp)
+    print("res:"+str(temp))
     return res.to(self.device)
 
     # plain_text = self.get_plain_text()

@@ -12,7 +12,7 @@
             "--model_name_or_path", "andeskyl/bert-base-cased-qnli",
             "--task_name", "qnli",
             "--len_data", "128",
-            "--num_data", "1",
+            "--num_data", "12",
             "--max_length", "128",
             "--comp",
             "--per_device_eval_batch_size", "1",

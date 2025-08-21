@@ -71,7 +71,7 @@ class FastSecNetReLU:
         #print("==="+str(k_ss))
         x_r =RingTensor(ct.communicator.get().all_reduce(k_ss.ring_tensor.tensor),dtype="float")
         #x_r = k_ss.restore()
-        print(x_r.convert_to_real_field())
+        print("x_r:"+str(x_r.convert_to_real_field()))
         res = ArithmeticSecretSharing(DCF.eval(x_r,key.dcf_key,party_id)) + key.b_ss
         res = convert_ass_to_mpctensor(res)
         x_r = x_r.convert_to_real_field()
