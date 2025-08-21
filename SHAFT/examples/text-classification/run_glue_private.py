@@ -397,7 +397,7 @@ def main():
 
     batch_size = 1
     seq_length = 4
-    vocab_size = 305  # BERT-base-cased 的标准词汇表大小
+    vocab_size = 28996  # BERT-base-cased 的标准词汇表大小
 
     # --- 核心代码 ---
 
