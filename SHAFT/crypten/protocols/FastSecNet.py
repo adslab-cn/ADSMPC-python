@@ -43,7 +43,6 @@ def convert_ass_to_mpctensor(ass_share: ArithmeticSecretSharing):
         
         from crypten.encoder import FixedPointEncoder
         mpc_tensor.encoder = FixedPointEncoder(precision_bits=precision_bits)
-        
     return mpc_tensor
 class FastSecNetReLUKey(Parameter):
     def __init__(self, dcf_key:DCFKey=None, r_ss=None, b_ss=None):
@@ -52,8 +51,9 @@ class FastSecNetReLUKey(Parameter):
         self.b_ss = b_ss
     @staticmethod
     def gen(num_of_keys, alpha, device="cpu"):
+        alpha.to(device)
         #b = RingTensor.stack([RingTensor.ones_like(alpha),alpha],dim=0)
-        b = RingTensor.convert_to_ring(torch.Tensor([1, -1 * alpha.convert_to_real_field()[0].item()],device=device))
+        b = RingTensor.convert_to_ring(torch.Tensor([1, -1 * alpha.convert_to_real_field()[0].item()],device=device)).to(device)
         dcf_key0,dcf_key1 =  DCFKey.gen(num_of_keys, alpha, -1 * b,device=device)
         R = ArithmeticSecretSharing.share(alpha)
         B = ArithmeticSecretSharing.share(b)
@@ -69,10 +69,21 @@ class FastSecNetReLU:
         key.r_ss.to(x_ss.device)
         k_ss = x_ss + key.r_ss 
         #print("==="+str(k_ss))
+        x = RingTensor(ct.communicator.get().all_reduce(x_ss.ring_tensor.tensor),dtype="float")
+        #x_r = k_ss.restore()
+        print("x:"+str(x.convert_to_real_field()))
+        r =RingTensor(ct.communicator.get().all_reduce(key.r_ss.ring_tensor.tensor),dtype="float")
+        #x_r = k_ss.restore()
+        print("r:"+str(r.convert_to_real_field()))
         x_r =RingTensor(ct.communicator.get().all_reduce(k_ss.ring_tensor.tensor),dtype="float")
         #x_r = k_ss.restore()
         print("x_r:"+str(x_r.convert_to_real_field()))
         res = ArithmeticSecretSharing(DCF.eval(x_r,key.dcf_key,party_id)) + key.b_ss
+        temp =RingTensor(ct.communicator.get().all_reduce(res.ring_tensor.tensor),dtype="float")
+        print("res[01]"+str(temp.convert_to_real_field()))
+        from crypten.mpc.mpc import MPCTensor
+        from crypten.mpc import ptype
+        #res = MPCTensor.from_shares(res.ring_tensor.tensor, ptype=ptype.arithmetic)
         res = convert_ass_to_mpctensor(res)
         x_r = x_r.convert_to_real_field()
         #print(x_r.convert_to_real_field())

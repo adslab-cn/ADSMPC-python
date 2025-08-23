@@ -98,8 +98,8 @@ class DCFKey(Parameter):
         for i in range(alpha.bit_len):
             s_l_0, v_l_0, t_l_0, s_r_0, v_r_0, t_r_0 = CW.gen_dcf_cw(prg, s_last_0, LAMBDA)
             s_l_1, v_l_1, t_l_1, s_r_1, v_r_1, t_r_1 = CW.gen_dcf_cw(prg, s_last_1, LAMBDA)
-
-            cond = (alpha.get_tensor_bit(alpha.bit_len - 1 - i) == 0).view(-1, 1)
+            #TODO Joker need to work here
+            cond = (alpha.get_tensor_bit(alpha.bit_len - 1 - i) == 0).view(-1, 1).to(device)
 
             l_tensors = [s_l_0, s_l_1, v_l_0, v_l_1, t_l_0, t_l_1]
             r_tensors = [s_r_0, s_r_1, v_r_0, v_r_1, t_r_0, t_r_1]

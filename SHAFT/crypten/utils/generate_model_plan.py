@@ -41,7 +41,7 @@ def plan_and_generate_keys_with_hooks(pytorch_model, dummy_input, num_inferences
     
     manifest = []
     handles = []
-    
+    device = "cpu"
     def capture_hook(module, input_tensors, output_tensor):
         if isinstance(module, (ReLUFastSecNet, GELU, SiLU, Softmax)):
             input_shape = tuple(input_tensors[0].shape)
@@ -80,13 +80,12 @@ def plan_and_generate_keys_with_hooks(pytorch_model, dummy_input, num_inferences
 
     crypten_model.encrypt()
     with torch.no_grad():
-        crypten_model.eval().cpu()
-        
+        crypten_model.eval().to(device)
         if isinstance(dummy_input, (list, tuple)):
-            crypten_dummy_input = [crypten.cryptensor(t.cpu()) for t in dummy_input]
+            crypten_dummy_input = [crypten.cryptensor(t.to(device)) for t in dummy_input]
             crypten_model(*crypten_dummy_input)
         else:
-            crypten_dummy_input = crypten.cryptensor(dummy_input.cpu())
+            crypten_dummy_input = crypten.cryptensor(dummy_input.to(device))
             crypten_model(crypten_dummy_input)
 
     for handle in handles:
@@ -104,7 +103,7 @@ def plan_and_generate_keys_with_hooks(pytorch_model, dummy_input, num_inferences
             count *= 2
         #keys[layer_name] = FastSecNetReLUKey.gen(count,RingTensor.random(shape=(1,), dtype='float', device='cpu'),device="cpu")
         #keys[layer_name] = FastSecNetReLUKey.gen(count,RingTensor([1000.], device='cpu'),device="cpu")
-        keys[layer_name] = FastSecNetReLUKey.gen(count,RingTensor.convert_to_ring(torch.tensor([1000.], device='cpu')),device="cpu")
+        keys[layer_name] = FastSecNetReLUKey.gen(count,RingTensor.convert_to_ring(torch.tensor([1000.], device=device)),device=device)
     if len(manifest) > 0:
         data_path = f"{param_path}{FastSecNetReLUKey.__name__}/"
         os.makedirs(data_path, exist_ok=True)

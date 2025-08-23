@@ -70,11 +70,15 @@ class ParamProvider:
             end_idx = start_idx + number_of_params
 
             if end_idx > self.total_count:
-                raise ValueError(
-                    f"Not enough pre-computed parameters in the pool for this request. "
-                    f"Requested: {number_of_params}, "
-                    f"Available: {self.total_count - start_idx}."
-                )
+                #TODO joker need to work here
+                self.ptr = 0
+                start_idx = self.ptr
+                end_idx = start_idx + number_of_params
+                # raise ValueError(
+                #     f"Not enough pre-computed parameters in the pool for this request. "
+                #     f"Requested: {number_of_params}, "
+                #     f"Available: {self.total_count - start_idx}."
+                # )
 
             # 使用 Parameter 类自己的 __getitem__ (切片) 功能
             # 这会返回一个新的、尺寸正确的 Parameter 对象

@@ -9,7 +9,6 @@
 
 import math
 
-from NssMPC.crypto.aux_parameter.function_secret_sharing_keys.dcf_key import DCFKey
 import torch
 import crypten as ct
 from crypten.config import cfg
@@ -38,8 +37,7 @@ __all__ = [
     "relu_fastsecnet"
 ]
 
-from NssMPC import RingTensor, ArithmeticSecretSharing
-from crypten.protocols import FastSecNetReLU
+
 
 
 # Iterative methods:
@@ -536,20 +534,48 @@ def _diff_silu(x):
     return torch.sign(x) * (torch.nn.functional.silu(x) - torch.nn.functional.relu(x))
 
 def relu_fastsecnet(self):
-    temp = self.get_plain_text()
-    print("self:"+str(temp))
+    from NssMPC import RingTensor, ArithmeticSecretSharing
+    from crypten.protocols import FastSecNetReLU
+    from crypten.cuda import CUDALongTensor
     comm = ct.communicator.get()
     my_rank = comm.get_rank()
     provider = comm.get_provider("FSS_ReLU")
     keys_for_this_layer = provider.get_parameters(1)[0]
+    print("="*20)
+    print("="*20)
+    print("="*20)
+    # if my_rank == 0:
+    #     self._tensor.share[0,0,0,0] =  CUDALongTensor(torch.tensor(-1012919762639397991, device="cuda"))
+    #     self._tensor.share[0,0,0,1] =  CUDALongTensor(torch.tensor(8080679332951022680, device="cuda"))
+    #     self._tensor.share[0,0,1,0] =  CUDALongTensor(torch.tensor(-8330588077126407573, device="cuda"))
+    #     self._tensor.share[0,0,1,1] =  CUDALongTensor(torch.tensor(7091174060845848431, device="cuda"))
+    #     self._tensor.share[0,1,0,0] =  CUDALongTensor(torch.tensor(1388776388154519852, device="cuda"))
+    #     self._tensor.share[0,1,0,1] =  CUDALongTensor(torch.tensor(-6076269160027615399, device="cuda"))
+    #     self._tensor.share[0,1,1,0] =  CUDALongTensor(torch.tensor(-8779409261842279292, device="cuda"))
+    # elif my_rank == 1:
+    #     self._tensor.share[0,0,0,0] =  CUDALongTensor(torch.tensor(1012919762639411098, device="cuda"))
+    #     self._tensor.share[0,0,0,1] =  CUDALongTensor(torch.tensor(-7884071329461361752, device="cuda"))
+    #     self._tensor.share[0,0,1,0] =  CUDALongTensor(torch.tensor(8330588077126604181, device="cuda"))
+    #     self._tensor.share[0,0,1,1] =  CUDALongTensor(torch.tensor(7091174060845848431, device="cuda"))
+    #     self._tensor.share[0,1,0,0] =  CUDALongTensor(torch.tensor(-1388776388154847532, device="cuda"))
+    #     self._tensor.share[0,1,0,1] =  CUDALongTensor(torch.tensor(6076168963419615399, device="cuda"))
+    #     self._tensor.share[0,1,1,0] =  CUDALongTensor(torch.tensor(8779409261841859862, device="cuda"))
+    temp = self.get_plain_text()
+    print("self:"+str(temp))
+
     t = RingTensor([10.])
     t.tensor = self.share
     t.dtype = "float"
     x_ss = ArithmeticSecretSharing(t)
+    #print("x_ss:"+str(x_ss))
+    #print(f"r_ss:{keys_for_this_layer.r_ss}")
+    x =RingTensor(ct.communicator.get().all_reduce(x_ss.ring_tensor.tensor),dtype="float")
+    print("x:"+str(x.convert_to_real_field()))
     res = FastSecNetReLU.eval(x_ss, keys_for_this_layer, my_rank)
     temp = res.get_plain_text()
     print("res:"+str(temp))
-    return res.to(self.device)
+    res.to(self.device)
+    return res
 
     # plain_text = self.get_plain_text()
     # #print(plain_text)
@@ -597,7 +623,10 @@ def gelu(self, approximate="none"):
         else:
             #_, _, beta_sin = ct.common.util.fourier_series(_diff_gelu, width, terms)
             beta_sin = torch.tensor([-0.0818,-0.0809,-0.0424,-0.0176,-0.0079,-0.0043,-0.0026,-0.0017], device=self.device)
+        #TODO Joker need work here
+        relu_x.to("cuda")
         out = relu_x + do_fs * _fourier_series(abs_x, terms, period, beta_sin=beta_sin)
+        #out.to("cuda")
         return out
     elif method == "secformer":
         # set erf_fs_period: 20, erf_fs_terms: 7

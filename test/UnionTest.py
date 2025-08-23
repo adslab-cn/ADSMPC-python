@@ -1,8 +1,5 @@
-from NssMPC.crypto.aux_parameter.function_secret_sharing_keys.dcf_key import DCFKey
 import torch
 
-from NssMPC import RingTensor, ArithmeticSecretSharing
-from NssMPC.crypto.primitives import DCF
 from crypten.protocols.FastSecNet import FastSecNetReLU
 from multiprocess_launcher import MultiProcessLauncher
 import pickle
@@ -10,8 +7,9 @@ from crypten import communicator as comm
 import crypten as ct
 device = "cpu"
 torch_plain = torch.tensor(
-    [[3000000000000., 0.2, 3., -0.4, -5., -3000000., -6.4, 1.], [1940000000., 2., 3., -0.4, -5., 1., -6.5, 1.]],
+    [[3000000000000., 0.2, -4295000000., -0.4, -5., -3000000., -6.4, 1.], [1940000000., 2., 3., -0.4, -5., 1., -6.5, 1.]],
     device=device)
+from NssMPC import RingTensor, ArithmeticSecretSharing
 plaintext_input = RingTensor(torch_plain)
 num_of_keys = plaintext_input.numel()
 
@@ -32,6 +30,7 @@ def UnionTest():
     #x_ss = ArithmeticSecretSharing(RingTensor.convert_to_ring(x_encrypted._tensor)).to(device)
     with open(f"k{my_rank}.pickle", 'rb') as f:
         key = pickle.load(f)
+        from NssMPC.crypto.aux_parameter.function_secret_sharing_keys.dcf_key import DCFKey
         key.dcf_key = DCFKey.from_dic(key.dcf_key)
     #print(key.r_ss)
     res = FastSecNetReLU.eval(x_ss, key, my_rank)

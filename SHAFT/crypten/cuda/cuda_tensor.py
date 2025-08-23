@@ -394,7 +394,7 @@ class CUDALongTensor(object):
     def __idiv__(self, y):
         if isinstance(y, CUDALongTensor):
             y = y.tensor()
-        self._tensor /= y
+        self._tensor //= y
         return self
 
     def __imod__(self, y):
@@ -451,9 +451,13 @@ class CUDALongTensor(object):
         return result.__ifloordiv__(y)
 
     def __truediv__(self, y):
-        result = self.clone()
-        return result.__idiv__(y)
-
+        #result = self.clone()
+        #return result.__idiv__(y)
+        if isinstance(y, CUDALongTensor):
+            y = y.tensor()
+    # 执行真正的浮点除法，并返回一个新的 PyTorch 张量
+    # 注意：这里我们脱离了 CUDALongTensor，因为结果不再是 Long
+        return self._tensor.float() / y
     def __mod__(self, y):
         result = self.clone()
         return result.__imod__(y)

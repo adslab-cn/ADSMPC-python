@@ -369,7 +369,7 @@ def main():
     rank = ct.communicator.get().get_rank()
 
 
-    dummy = torch.zeros_like(model.dummy_inputs["input_ids"])
+    dummy = torch.zeros_like(model.dummy_inputs["input_ids"]).to(device)
     # dummy_ids = torch.zeros((1,128))
     # dummy_mask = torch.ones((1,128),dtype=torch.long)
     # dummy_token_ids = torch.zeros((1,128),dtype=torch.long)
@@ -396,7 +396,7 @@ def main():
         # plan_and_generate_keys_with_hooks(model,dummy_input_tuple)
 
     batch_size = 1
-    seq_length = 4
+    seq_length = 2
     vocab_size = 28996  # BERT-base-cased 的标准词汇表大小
 
     # --- 核心代码 ---
@@ -412,8 +412,9 @@ def main():
 
     # 4. 将它们打包成一个元组
     dummy_input_tuple = (dummy_input_ids, dummy_attention_mask, dummy_token_type_ids)
-    from crypten.utils.generate_model_plan import plan_and_generate_keys_with_hooks
-    #plan_and_generate_keys_with_hooks(model,dummy_input_tuple)
+    if rank == 0 :
+        from crypten.utils.generate_model_plan import plan_and_generate_keys_with_hooks
+        #plan_and_generate_keys_with_hooks(model,dummy_input_tuple)
     print(f"Rank {rank} is waiting at the barrier...")
     ct.communicator.get().barrier()
     print(f"Rank {rank} has passed the barrier.")
@@ -425,6 +426,7 @@ def main():
         data_path="/home/joker/.NssMPClib/data/64/aux_parameters/FastSecNetReLUKey/"
     )
     ct.communicator.get().add_provider("FSS_ReLU", fss_relu_provider)
+    model.to(device)
     private_model = ct.nn.from_pytorch(model, (dummy, dummy, dummy)).encrypt().to(device)
     model.eval()
     samples_seen = 0

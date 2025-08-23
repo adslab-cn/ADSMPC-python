@@ -70,7 +70,7 @@ class PRG(object):
         elif isinstance(seeds, torch.Tensor):
             self._prg.set_seeds(seeds.contiguous())
 
-    def bit_random_tensor(self, bits, device=None):
+    def bit_random_tensor(self, bits, device=DEVICE):
         """
         Generate a tensor containing n-bit random numbers that can be generated in parallel,
         with the number of parallel operations matching the number of seed values.
