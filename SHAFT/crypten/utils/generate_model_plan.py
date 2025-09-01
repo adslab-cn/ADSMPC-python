@@ -43,7 +43,7 @@ def plan_and_generate_keys_with_hooks(pytorch_model, dummy_input, num_inferences
     handles = []
     device = "cpu"
     def capture_hook(module, input_tensors, output_tensor):
-        if isinstance(module, (ReLUFastSecNet, GELU, SiLU, Softmax)):
+        if isinstance(module, (ReLUFastSecNet, GELU, SiLU)):#, Softmax)):
             input_shape = tuple(input_tensors[0].shape)
             num_keys = input_tensors[0].numel()
             node_name = module.node_name
@@ -57,7 +57,7 @@ def plan_and_generate_keys_with_hooks(pytorch_model, dummy_input, num_inferences
     def set_shape_inference_mode_hook(module, input_tensors):
         return input_tensors, {'mode': 'shape_inference'}
     for name, module_instance in crypten_model.named_modules():
-        if isinstance(module_instance, (ReLUFastSecNet, GELU, SiLU, Softmax)):
+        if isinstance(module_instance, (ReLUFastSecNet, GELU, SiLU)):#, Softmax)):
             hook_with_name = lambda m, i, o, n=name: capture_hook_with_name(m, i, o, n)
             handle = module_instance.register_forward_hook(hook_with_name)
             handles.append(handle)

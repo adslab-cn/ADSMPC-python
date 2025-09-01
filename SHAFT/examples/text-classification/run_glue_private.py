@@ -363,7 +363,7 @@ def main():
     else:
         metric = evaluate.load("accuracy")
 
-    device = "cuda"
+    device = "cpu"
     ct.init()
 
     rank = ct.communicator.get().get_rank()
@@ -396,7 +396,7 @@ def main():
         # plan_and_generate_keys_with_hooks(model,dummy_input_tuple)
 
     batch_size = 1
-    seq_length = 2
+    seq_length = 64
     vocab_size = 28996  # BERT-base-cased 的标准词汇表大小
 
     # --- 核心代码 ---
@@ -423,43 +423,104 @@ def main():
         param_type=type({}),
         party_id=rank,
         saved_name=f"relu_{FastSecNetReLUKey.__name__}",  # 与离线生成时使用的名字匹配
-        data_path="/home/joker/.NssMPClib/data/64/aux_parameters/FastSecNetReLUKey/"
+        data_path="/home/adslab/.NssMPClib/data/64/aux_parameters/FastSecNetReLUKey/"
     )
     ct.communicator.get().add_provider("FSS_ReLU", fss_relu_provider)
     model.to(device)
     private_model = ct.nn.from_pytorch(model, (dummy, dummy, dummy)).encrypt().to(device)
+    def print_input_hook(module, input_tuple):
+        """
+        一个前向预处理钩子，用于解密并打印模块的输入。
+        """
+        # 获取当前进程的 rank，以便只有 rank 0 打印信息，避免刷屏
+        rank = ct.communicator.get().get_rank()
+
+        # 模块的名字，用于区分是哪一层的输出
+        module_name = module.__class__.__name__
+        if module_name in ("Constant","Parameter"):
+            return
+        if rank == 0:
+            print(f"\n====================[ HOOK: Entering {module_name} ]====================")
+        
+        # input_tuple 是一个元组，可能包含多个输入张量
+        for i, inp in enumerate(input_tuple):
+            # 我们只关心 CrypTensor
+            if isinstance(inp, ct.CrypTensor):
+                try:
+                    # 解密张量
+                    plaintext_tensor = inp.get_plain_text()
+                    
+                    # 打印信息
+                    if rank ==0:
+                        print(f"--> Input [{i}] to '{module_name}':")
+                        print(f"    Shape: {plaintext_tensor.shape}")
+                        print(f"    Dtype: {plaintext_tensor.dtype}")
+                    
+                    # 为了避免打印过大的张量，我们只打印一些统计信息和少量样本
+                    # 计算统计数据
+                    p_min = plaintext_tensor.min().item()
+                    p_max = plaintext_tensor.max().item()
+                    p_mean = plaintext_tensor.float().mean().item()
+                    p_std = plaintext_tensor.float().std().item()
+                    if rank == 0:
+                        print(f"    Stats: min={p_min:.4f}, max={p_max:.4f}, mean={p_mean:.4f}, std={p_std:.4f}")
+                    
+                    # 打印张量的前几个元素作为样本
+                    # 使用 torch.flatten 将张量展平，然后取前8个元素
+                    sample_values = torch.flatten(plaintext_tensor)[:8].tolist()
+                    if rank == 0:
+                        print(f"    Sample values: {sample_values}")
+                    
+                except Exception as e:
+                    if rank == 0:
+                        print(f"    [!] Error decrypting or printing input [{i}] for {module_name}: {e}")
+            else:
+                if rank == 0:
+                # 如果输入不是 CrypTensor (例如，一些配置参数)
+                    print(f"--> Input [{i}] to '{module_name}' is not a CrypTensor. Type: {type(inp)}")
+        if rank == 0:
+            print(f"====================[ End Hook for {module_name} ]====================\n")
+
+
+    # 2. 将钩子注册到 private_model 的所有子模块上
+    # ------------------------------------------------------------------------------
+    print("\n[DEBUG] Registering printing hooks on all submodules...")
+    #for name, module in private_model.named_modules():
+    #    # 我们给每个模块都注册上这个钩子
+    #    module.register_forward_pre_hook(print_input_hook)
+    print("[DEBUG] Hook registration complete.\n")
     model.eval()
     samples_seen = 0
     for step, batch in enumerate(eval_dataloader):
         if args.len_data > 0 and batch["input_ids"].shape[1] != args.len_data:
             continue
-        dummy_input_ids = torch.randint(
-            low=0, 
-            high=vocab_size, 
-            size=(batch_size, seq_length), 
-            dtype=torch.long, 
-            device=device
-        )
+        #dummy_input_ids = torch.randint(
+        #    low=0, 
+        #    high=vocab_size, 
+        #    size=(batch_size, seq_length), 
+        #    dtype=torch.long, 
+        #    device=device
+        #)
 
         # 2. 重新生成 dummy_attention_mask (最简单的方式是全1)
-        dummy_attention_mask = torch.ones(
-            (batch_size, seq_length), 
-            dtype=torch.long, 
-            device=device
-        )
+        #dummy_attention_mask = torch.ones(
+        #    (batch_size, seq_length), 
+        #    dtype=torch.long, 
+        #    device=device
+        #)
 
         # 3. 重新生成 dummy_token_type_ids (最简单的方式是全0)
-        dummy_token_type_ids = torch.zeros(
-            (batch_size, seq_length), 
-            dtype=torch.long, 
-            device=device
-        )
-        #inputs_enc = ct.cryptensor(batch["input_ids"]).to(device)
-        #attention_mask_enc = ct.cryptensor(batch["attention_mask"]).to(device)
-        #token_type_enc = ct.cryptensor(batch["token_type_ids"]).to(device)
-        inputs_enc = ct.cryptensor(dummy_input_ids).to(device)
-        attention_mask_enc = ct.cryptensor(dummy_attention_mask).to(device)
-        token_type_enc = ct.cryptensor(dummy_token_type_ids).to(device)
+        #dummy_token_type_ids = torch.zeros(
+        #    (batch_size, seq_length), 
+        #    dtype=torch.long, 
+        #    device=device
+        #)
+        inputs_enc = ct.cryptensor(batch["input_ids"]).to(device)
+        attention_mask_enc = ct.cryptensor(batch["attention_mask"]).to(device)
+        token_type_enc = ct.cryptensor(batch["token_type_ids"]).to(device)
+        #inputs_enc = ct.cryptensor(dummy_input_ids).to(device)
+        #attention_mask_enc = ct.cryptensor(dummy_attention_mask).to(device)
+        #token_type_enc = ct.cryptensor(dummy_token_type_ids).to(device)
 
         with ct.no_grad():
             outputs_enc = private_model(inputs_enc, attention_mask_enc, token_type_enc)

@@ -1279,9 +1279,9 @@ class Add(Module):
         assert isinstance(input, (list, tuple)), "input must be list or tuple"
         assert len(input) == 2, "input must contain two tensors"
         if crypten.is_encrypted_tensor(input[0]) is not True and crypten.is_encrypted_tensor(input[1]):
-            return input[1].add(input[0].to(input[1].device))
+            return input[1].add(input[0])
         else:
-            return input[0].add(input[1].to(input[0].device))
+            return input[0].add(input[1])
 
     @staticmethod
     def from_onnx(attributes=None):
@@ -3365,6 +3365,7 @@ class GELU(Module):
             logging.warning("Shaft GELU module does not support inplace computation.")
     
     def forward(self, x, mode = "secure"):
+        print("GELU mode :"+mode)
         if mode == 'shape_inference':
             return crypten.cryptensor(torch.zeros(x.shape))
         return x.gelu(approximate=self.approximate)

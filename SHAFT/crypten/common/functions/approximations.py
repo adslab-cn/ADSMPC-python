@@ -539,11 +539,16 @@ def relu_fastsecnet(self):
     from crypten.cuda import CUDALongTensor
     comm = ct.communicator.get()
     my_rank = comm.get_rank()
+    #print(f"debug {my_rank} start")
+    import time
+    start = time.time()
     provider = comm.get_provider("FSS_ReLU")
     keys_for_this_layer = provider.get_parameters(1)[0]
-    print("="*20)
-    print("="*20)
-    print("="*20)
+    temp = time.time()
+    #print(f"{my_rank} got keys:"+str(temp - start))
+    #print("="*20)
+    #print("="*20)
+    #print("="*20)
     # if my_rank == 0:
     #     self._tensor.share[0,0,0,0] =  CUDALongTensor(torch.tensor(-1012919762639397991, device="cuda"))
     #     self._tensor.share[0,0,0,1] =  CUDALongTensor(torch.tensor(8080679332951022680, device="cuda"))
@@ -560,21 +565,31 @@ def relu_fastsecnet(self):
     #     self._tensor.share[0,1,0,0] =  CUDALongTensor(torch.tensor(-1388776388154847532, device="cuda"))
     #     self._tensor.share[0,1,0,1] =  CUDALongTensor(torch.tensor(6076168963419615399, device="cuda"))
     #     self._tensor.share[0,1,1,0] =  CUDALongTensor(torch.tensor(8779409261841859862, device="cuda"))
+    
     temp = self.get_plain_text()
-    print("self:"+str(temp))
+    # if my_rank == 0:
+    #     print("self:"+str(temp))
 
     t = RingTensor([10.])
     t.tensor = self.share
     t.dtype = "float"
     x_ss = ArithmeticSecretSharing(t)
+    #print(x_ss.shape)
     #print("x_ss:"+str(x_ss))
-    #print(f"r_ss:{keys_for_this_layer.r_ss}")
-    x =RingTensor(ct.communicator.get().all_reduce(x_ss.ring_tensor.tensor),dtype="float")
-    print("x:"+str(x.convert_to_real_field()))
+    # if my_rank ==0 :
+    #     print(f"r_ss:{keys_for_this_layer.r_ss}")
+    #x =RingTensor(ct.communicator.get().all_reduce(x_ss.ring_tensor.tensor),dtype="float")
+    #print("x:"+str(x.convert_to_real_field()))
+    #print(f"{my_rank} got prepared for FastSecNet:"+str(time.time()-temp))
+    temp = time.time()
     res = FastSecNetReLU.eval(x_ss, keys_for_this_layer, my_rank)
     temp = res.get_plain_text()
-    print("res:"+str(temp))
+    
+    # if my_rank==0:
+    #     print("res:"+str(temp))
     res.to(self.device)
+    #print(f"{my_rank} got res:"+str(time.time()-temp))
+    #print(f"debug {my_rank} end")
     return res
 
     # plain_text = self.get_plain_text()
@@ -596,7 +611,7 @@ def relu(self, approximate="logic_relu", mode='secure'):
     if mode == "shape_inference":
         return self
     if approximate=="logic_relu":
-        logic_relu(self)
+        return logic_relu(self)
     elif approximate == "fastsecnet":
         return relu_fastsecnet(self)
     else:
@@ -609,11 +624,21 @@ def gelu(self, approximate="none"):
     if method == "ideal":
         return ct.cryptensor(torch.nn.functional.gelu(self.get_plain_text(), approximate=approximate), device=self.device)
     elif method == "fourier":
+        temp = self.get_plain_text()
+        comm = ct.communicator.get()
+        rank = comm.get_rank()
+        if rank ==0:
+            print("gelu self:"+str(temp))
+
+
         period = cfg.functions.gelu_fs_period
         width = period / 2
         terms = cfg.functions.gelu_fs_terms
-
+        import time
+        start = time.time()
         relu_x = self.relu(approximate ="fastsecnet")
+        end = time.time()
+        #print("gelu:"+str(end-start))
         abs_x = 2 * relu_x - self
         do_fs = abs_x < width
 
@@ -624,9 +649,11 @@ def gelu(self, approximate="none"):
             #_, _, beta_sin = ct.common.util.fourier_series(_diff_gelu, width, terms)
             beta_sin = torch.tensor([-0.0818,-0.0809,-0.0424,-0.0176,-0.0079,-0.0043,-0.0026,-0.0017], device=self.device)
         #TODO Joker need work here
-        relu_x.to("cuda")
+        relu_x.to("cpu")
         out = relu_x + do_fs * _fourier_series(abs_x, terms, period, beta_sin=beta_sin)
         #out.to("cuda")
+        temp = out.get_plain_text()
+        print("gelu output: "+str(temp))
         return out
     elif method == "secformer":
         # set erf_fs_period: 20, erf_fs_terms: 7
@@ -709,13 +736,26 @@ def softmax(self, dim,**kwargs):
             inv_denominator = numerator.sum(dim, keepdim=True).reciprocal()
         return numerator * inv_denominator
     elif method == "ode":
+        temp = self.get_plain_text()
+        comm = ct.communicator.get()
+        rank = comm.get_rank()
+        if rank ==0:
+            print("softmax self:"+str(temp))
+
+
         iter_num = cfg.functions.softmax_ode_iter_num
         clip = cfg.functions.softmax_ode_clip
         upper, lower = cfg.functions.softmax_ode_ub, cfg.functions.softmax_ode_lb
 
         if clip:
             # clip the input within the range [lower, upper] for numerical stability
-            diff = ct.cat([self - upper, lower - self]).relu(approximate ="fastsecnet").to(self.device).split(self.shape[0])#.split([1,1])
+            import time
+            start = time.time()
+            #diff = ct.cat([self - upper, lower - self]).relu(approximate ="fastsecnet").to(self.device).split(self.shape[0])#.split([1,1])
+
+            diff = ct.cat([self - upper, lower - self]).relu().to(self.device).split(self.shape[0])#.split([1,1])
+            end = time.time()
+            #print("softmax:"+str(end-start))
             self += diff[1] - diff[0]
 
         # initialize ode approximation
@@ -725,6 +765,8 @@ def softmax(self, dim,**kwargs):
         # compute ode update formula
         for _ in range(iter_num):
             g += (x - g.mul(x).sum(dim=dim).unsqueeze(-1)).squeeze(-1) * g
+        temp = g.get_plain_text()
+        print("Softmax output"+str(temp))
         return g
     else:
         raise ValueError(f"Unrecognized method {method} for softmax")

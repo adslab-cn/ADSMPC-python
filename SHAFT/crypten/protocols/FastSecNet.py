@@ -66,26 +66,39 @@ class FastSecNetReLU:
         return FastSecNetReLUKey.gen(num_of_keys, alpha, device)
     @staticmethod
     def eval(x_ss:ArithmeticSecretSharing, key:FastSecNetReLUKey, party_id):
+        import time
+        #print("debug start")
+        start = time.time()
         key.r_ss.to(x_ss.device)
         k_ss = x_ss + key.r_ss 
         #print("==="+str(k_ss))
-        x = RingTensor(ct.communicator.get().all_reduce(x_ss.ring_tensor.tensor),dtype="float")
+        #x = RingTensor(ct.communicator.get().all_reduce(x_ss.ring_tensor.tensor),dtype="float")
         #x_r = k_ss.restore()
-        print("x:"+str(x.convert_to_real_field()))
-        r =RingTensor(ct.communicator.get().all_reduce(key.r_ss.ring_tensor.tensor),dtype="float")
+        #print("x:"+str(x.convert_to_real_field()))
+        #r =RingTensor(ct.communicator.get().all_reduce(key.r_ss.ring_tensor.tensor),dtype="float")
         #x_r = k_ss.restore()
-        print("r:"+str(r.convert_to_real_field()))
+        #print("r:"+str(r.convert_to_real_field()))
         x_r =RingTensor(ct.communicator.get().all_reduce(k_ss.ring_tensor.tensor),dtype="float")
         #x_r = k_ss.restore()
-        print("x_r:"+str(x_r.convert_to_real_field()))
+        #print(f"get prepared for dcf:"+str(time.time()-start) )
+        temp = time.time()
+        # if party_id ==0:
+        #     print("x_r:"+str(x_r.convert_to_real_field()))
         res = ArithmeticSecretSharing(DCF.eval(x_r,key.dcf_key,party_id)) + key.b_ss
+        #print("dcf finished:"+str(time.time()-temp))
+        temp = time.time()
         temp =RingTensor(ct.communicator.get().all_reduce(res.ring_tensor.tensor),dtype="float")
-        print("res[01]"+str(temp.convert_to_real_field()))
+        
+        # if party_id==0:
+        #     print("res[01]"+str(temp.convert_to_real_field()))
         from crypten.mpc.mpc import MPCTensor
         from crypten.mpc import ptype
         #res = MPCTensor.from_shares(res.ring_tensor.tensor, ptype=ptype.arithmetic)
         res = convert_ass_to_mpctensor(res)
         x_r = x_r.convert_to_real_field()
         #print(x_r.convert_to_real_field())
+        #print("get prepared for matmul:"+str(time.time()-temp))
+        temp = time.time()
         y = res[...,0] * x_r + res[...,1]
+        #print("got res:"+str(time.time()-temp))
         return y
