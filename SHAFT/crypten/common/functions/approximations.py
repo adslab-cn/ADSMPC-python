@@ -566,12 +566,13 @@ def relu_fastsecnet(self):
     #     self._tensor.share[0,1,0,1] =  CUDALongTensor(torch.tensor(6076168963419615399, device="cuda"))
     #     self._tensor.share[0,1,1,0] =  CUDALongTensor(torch.tensor(8779409261841859862, device="cuda"))
     
-    temp = self.get_plain_text()
+    #temp = self.get_plain_text()
     # if my_rank == 0:
     #     print("self:"+str(temp))
 
     t = RingTensor([10.])
     t.tensor = self.share
+    print(self.shape)
     t.dtype = "float"
     x_ss = ArithmeticSecretSharing(t)
     #print(x_ss.shape)
@@ -583,7 +584,7 @@ def relu_fastsecnet(self):
     #print(f"{my_rank} got prepared for FastSecNet:"+str(time.time()-temp))
     temp = time.time()
     res = FastSecNetReLU.eval(x_ss, keys_for_this_layer, my_rank)
-    temp = res.get_plain_text()
+    #temp = res.get_plain_text()
     
     # if my_rank==0:
     #     print("res:"+str(temp))
@@ -624,11 +625,11 @@ def gelu(self, approximate="none"):
     if method == "ideal":
         return ct.cryptensor(torch.nn.functional.gelu(self.get_plain_text(), approximate=approximate), device=self.device)
     elif method == "fourier":
-        temp = self.get_plain_text()
+        #temp = self.get_plain_text()
         comm = ct.communicator.get()
         rank = comm.get_rank()
-        if rank ==0:
-            print("gelu self:"+str(temp))
+        #if rank ==0:
+        #    print("gelu self:"+str(temp))
 
 
         period = cfg.functions.gelu_fs_period
@@ -652,8 +653,8 @@ def gelu(self, approximate="none"):
         relu_x.to("cpu")
         out = relu_x + do_fs * _fourier_series(abs_x, terms, period, beta_sin=beta_sin)
         #out.to("cuda")
-        temp = out.get_plain_text()
-        print("gelu output: "+str(temp))
+        #temp = out.get_plain_text()
+        #print("gelu output: "+str(temp))
         return out
     elif method == "secformer":
         # set erf_fs_period: 20, erf_fs_terms: 7
@@ -736,11 +737,11 @@ def softmax(self, dim,**kwargs):
             inv_denominator = numerator.sum(dim, keepdim=True).reciprocal()
         return numerator * inv_denominator
     elif method == "ode":
-        temp = self.get_plain_text()
+        #temp = self.get_plain_text()
         comm = ct.communicator.get()
         rank = comm.get_rank()
-        if rank ==0:
-            print("softmax self:"+str(temp))
+        #if rank ==0:
+        #    print("softmax self:"+str(temp))
 
 
         iter_num = cfg.functions.softmax_ode_iter_num
@@ -765,8 +766,8 @@ def softmax(self, dim,**kwargs):
         # compute ode update formula
         for _ in range(iter_num):
             g += (x - g.mul(x).sum(dim=dim).unsqueeze(-1)).squeeze(-1) * g
-        temp = g.get_plain_text()
-        print("Softmax output"+str(temp))
+        #temp = g.get_plain_text()
+        #print("Softmax output"+str(temp))
         return g
     else:
         raise ValueError(f"Unrecognized method {method} for softmax")

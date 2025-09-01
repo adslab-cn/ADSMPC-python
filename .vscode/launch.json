@@ -9,9 +9,10 @@
         "console": "integratedTerminal",
         "preLaunchTask": "setProxyForWSL",
         "args": [
-            "--model_name_or_path", "andeskyl/bert-base-cased-qnli",
+            "--model_name_or_path", "M-FAC/bert-tiny-finetuned-qnli",
             "--task_name", "qnli",
             "--len_data", "128",
+            "--comp",
             "--num_data", "1",
             "--max_length", "128",
             "--per_device_eval_batch_size", "1",

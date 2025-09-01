@@ -57,6 +57,7 @@ def plan_and_generate_keys_with_hooks(pytorch_model, dummy_input, num_inferences
     def set_shape_inference_mode_hook(module, input_tensors):
         return input_tensors, {'mode': 'shape_inference'}
     for name, module_instance in crypten_model.named_modules():
+        #print(name)
         if isinstance(module_instance, (ReLUFastSecNet, GELU, SiLU)):#, Softmax)):
             hook_with_name = lambda m, i, o, n=name: capture_hook_with_name(m, i, o, n)
             handle = module_instance.register_forward_hook(hook_with_name)
@@ -96,6 +97,7 @@ def plan_and_generate_keys_with_hooks(pytorch_model, dummy_input, num_inferences
     print(f"    ...Manifest created with {len(manifest)} entries.")
     print("[3/3] Saving keys based on the manifest...")
     keys = {}
+    print(str(manifest))
     for item in manifest:
         layer_name = item['layer_name']
         count = item['count'] * num_inferences

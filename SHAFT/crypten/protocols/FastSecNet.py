@@ -87,7 +87,7 @@ class FastSecNetReLU:
         res = ArithmeticSecretSharing(DCF.eval(x_r,key.dcf_key,party_id)) + key.b_ss
         #print("dcf finished:"+str(time.time()-temp))
         temp = time.time()
-        temp =RingTensor(ct.communicator.get().all_reduce(res.ring_tensor.tensor),dtype="float")
+        #temp =RingTensor(ct.communicator.get().all_reduce(res.ring_tensor.tensor),dtype="float")
         
         # if party_id==0:
         #     print("res[01]"+str(temp.convert_to_real_field()))

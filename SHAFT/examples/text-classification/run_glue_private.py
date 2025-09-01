@@ -396,7 +396,7 @@ def main():
         # plan_and_generate_keys_with_hooks(model,dummy_input_tuple)
 
     batch_size = 1
-    seq_length = 64
+    seq_length = 128
     vocab_size = 28996  # BERT-base-cased 的标准词汇表大小
 
     # --- 核心代码 ---
@@ -423,7 +423,7 @@ def main():
         param_type=type({}),
         party_id=rank,
         saved_name=f"relu_{FastSecNetReLUKey.__name__}",  # 与离线生成时使用的名字匹配
-        data_path="/home/adslab/.NssMPClib/data/64/aux_parameters/FastSecNetReLUKey/"
+        data_path="/home/joker/.NssMPClib/data/64/aux_parameters/FastSecNetReLUKey/"
     )
     ct.communicator.get().add_provider("FSS_ReLU", fss_relu_provider)
     model.to(device)
