@@ -363,7 +363,7 @@ def main():
     else:
         metric = evaluate.load("accuracy")
 
-    device = "cpu"
+    device = "cuda"
     ct.init()
 
     rank = ct.communicator.get().get_rank()

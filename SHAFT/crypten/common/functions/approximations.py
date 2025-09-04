@@ -572,7 +572,6 @@ def relu_fastsecnet(self):
 
     t = RingTensor([10.])
     t.tensor = self.share
-    print(self.shape)
     t.dtype = "float"
     x_ss = ArithmeticSecretSharing(t)
     #print(x_ss.shape)
@@ -638,6 +637,7 @@ def gelu(self, approximate="none"):
         import time
         start = time.time()
         relu_x = self.relu(approximate ="fastsecnet")
+        #relu_x = self.relu()
         end = time.time()
         #print("gelu:"+str(end-start))
         abs_x = 2 * relu_x - self
@@ -650,7 +650,7 @@ def gelu(self, approximate="none"):
             #_, _, beta_sin = ct.common.util.fourier_series(_diff_gelu, width, terms)
             beta_sin = torch.tensor([-0.0818,-0.0809,-0.0424,-0.0176,-0.0079,-0.0043,-0.0026,-0.0017], device=self.device)
         #TODO Joker need work here
-        relu_x.to("cpu")
+        #relu_x.to("cpu")
         out = relu_x + do_fs * _fourier_series(abs_x, terms, period, beta_sin=beta_sin)
         #out.to("cuda")
         #temp = out.get_plain_text()

@@ -370,7 +370,7 @@ class CUDALongTensor(object):
     def __iadd__(self, y):
         if isinstance(y, CUDALongTensor):
             y = y._tensor
-        self._tensor += y
+        self._tensor = self._tensor + y
         return self
 
     def __isub__(self, y):
@@ -382,7 +382,7 @@ class CUDALongTensor(object):
     def __imul__(self, y):
         if isinstance(y, CUDALongTensor):
             y = y.tensor()
-        self._tensor *= y
+        self._tensor = self._tensor * y
         return self
 
     def __ifloordiv__(self, y):

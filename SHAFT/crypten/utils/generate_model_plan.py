@@ -41,7 +41,7 @@ def plan_and_generate_keys_with_hooks(pytorch_model, dummy_input, num_inferences
     
     manifest = []
     handles = []
-    device = "cpu"
+    device = "cuda"
     def capture_hook(module, input_tensors, output_tensor):
         if isinstance(module, (ReLUFastSecNet, GELU, SiLU)):#, Softmax)):
             input_shape = tuple(input_tensors[0].shape)

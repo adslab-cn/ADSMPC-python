@@ -1281,7 +1281,7 @@ class Add(Module):
         if crypten.is_encrypted_tensor(input[0]) is not True and crypten.is_encrypted_tensor(input[1]):
             return input[1].add(input[0])
         else:
-            return input[0].add(input[1])
+            return input[0].add(input[1].to(input[0].device))
 
     @staticmethod
     def from_onnx(attributes=None):
@@ -1329,6 +1329,7 @@ class Div(Module):
     def forward(self, input):
         assert isinstance(input, (list, tuple)), "input must be list or tuple"
         assert len(input) == 2, "input must contain two tensors"
+        input[0].to(input[1].device)
         return input[0].div(input[1])
 
     @staticmethod
