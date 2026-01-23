@@ -12,7 +12,7 @@ from multiprocessing import Pipe, Lock
 
 from NssMPC.common.random.prg import MT19937_PRG
 from NssMPC.config import DEBUG_LEVEL, BIT_LEN, SOCKET_NUM, SOCKET_TYPE, DEVICE
-from NssMPC.crypto.aux_parameter import MatmulTriples, RssMatmulTriples
+from NssMPC.crypto.aux_parameter import MatmulTriples, RssMatmulTriples, GeLUKey
 from NssMPC.crypto.aux_parameter.function_secret_sharing_keys.vsigma_key import VSigmaKey
 from NssMPC.secure_model.utils.buffer_thread.buffer_thread import BufferThread
 
@@ -56,6 +56,8 @@ class PartyBase(object):
         """
         for name, provider in self.providers.items():
             if provider.param_type == MatmulTriples:
+                continue
+            if provider.param_type == GeLUKey:
                 continue
             if provider.param_type == VSigmaKey:
                 continue

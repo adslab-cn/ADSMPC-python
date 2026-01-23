@@ -10,6 +10,7 @@ from .activation import SecSoftmax, SecReLU, SecGELU, SecTanh
 from .sparse import SecEmbedding
 from .pooling import SecAvgPool2d, SecAdaptiveAvgPool2d, SecMaxPool2d
 from .conv import SecConv2d
-
-__all__ = ["SecLinear", "SecLayerNorm", "SecBatchNorm2d", "SecSoftmax", "SecReLU", "SecGELU", "SecTanh", "SecEmbedding",
-           "SecAvgPool2d", "SecAdaptiveAvgPool2d", "SecMaxPool2d", "SecConv2d", "SecDropout"]
+# 把 SecEmbeddings (复数) 也加进去
+from NssMPC.application.neural_network.layers.embedding import   SecBertEmbeddings
+__all__ = ["SecLinear", "SecLayerNorm", "SecBatchNorm2d", "SecSoftmax", "SecReLU", "SecGELU", "SecTanh", "SecEmbedding","SecEmbeddings",
+           "SecAvgPool2d", "SecAdaptiveAvgPool2d", "SecMaxPool2d","SecBertEmbeddings", "SecConv2d", "SecDropout"]

@@ -45,18 +45,41 @@ class SecLinear(torch.nn.Module):
         self.weight = torch.nn.Parameter(torch.zeros([output, input], dtype=torch.int64), requires_grad=False)
         self.bias = torch.nn.Parameter(torch.zeros([output], dtype=torch.int64), requires_grad=False)
 
+    # def forward(self, x):
+    #     """
+    #     The forward propagation process.
+
+    #     The weights and biases are first converted to shared form using the function :func:`~NssMPC.application.neural_network.functional.functional.torch2share`, and then ``z`` is computed by matrix multiplication and addition.
+
+    #     :param x: Input tensor, typically coming from the output of the previous layer.
+    #     :type x: ArithmeticSecretSharing
+    #     :return: The returned result ``z`` is calculated by a linear transformation.
+    #     :rtype: ArithmeticSecretSharing
+    #     """
+    #     weight = torch2share(self.weight, x.__class__, x.dtype).T
+    #     bias = torch2share(self.bias, x.__class__, x.dtype)
+    #     z = (x @ weight) + bias
+    #     return z
     def forward(self, x):
         """
-        The forward propagation process.
-
-        The weights and biases are first converted to shared form using the function :func:`~NssMPC.application.neural_network.functional.functional.torch2share`, and then ``z`` is computed by matrix multiplication and addition.
-
-        :param x: Input tensor, typically coming from the output of the previous layer.
-        :type x: ArithmeticSecretSharing
-        :return: The returned result ``z`` is calculated by a linear transformation.
-        :rtype: ArithmeticSecretSharing
+        The forward propagation process with dual logic for dummy and secure modes.
         """
-        weight = torch2share(self.weight, x.__class__, x.dtype).T
-        bias = torch2share(self.bias, x.__class__, x.dtype)
-        z = (x @ weight) + bias
-        return z
+        # 导入必要的模块
+        import torch
+        import torch.nn.functional as F
+        from NssMPC import ArithmeticSecretSharing # 或者其他秘密共享基类
+
+        # --- 核心修改：根据输入 x 的类型，选择不同的执行路径 ---
+
+        if isinstance(x, torch.Tensor):
+            weight_float = self.weight.to(x.dtype)
+            bias_float = self.bias.to(x.dtype)
+            
+            return F.linear(x, weight_float, bias_float)
+
+        else:
+            weight = torch2share(self.weight, x.__class__, x.dtype).T
+            bias = torch2share(self.bias, x.__class__, x.dtype)
+            
+            z = (x @ weight) + bias
+            return z

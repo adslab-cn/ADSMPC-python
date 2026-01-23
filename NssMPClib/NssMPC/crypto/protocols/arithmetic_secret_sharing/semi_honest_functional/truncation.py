@@ -22,6 +22,7 @@ def truncate(share, scale=None):
     :returns: The truncated sharing data.
     :rtype: ArithmeticSecretSharing
     """
+    
     share_tensor = share.item.tensor
     wrap_count = _wraps(share_tensor)
     share_tensor = share_tensor.div(scale, rounding_mode="trunc").to(data_type)

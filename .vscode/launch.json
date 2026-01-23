@@ -1,0 +1,16 @@
+{
+    "version": "0.2.0",
+    "configurations": [
+        {
+            "name": "Python: Debug BERT Test",
+            "type": "python",
+            "request": "launch",
+            "program": "${workspaceFolder}/NssMPClib/test/test_mha.py", // 确认这个路径是正确的
+            "console": "integratedTerminal",
+            "justMyCode": true,
+            "env": {
+                "PYTHONPATH": "${workspaceFolder}/NssMPClib/"
+            }
+        }
+    ]
+}

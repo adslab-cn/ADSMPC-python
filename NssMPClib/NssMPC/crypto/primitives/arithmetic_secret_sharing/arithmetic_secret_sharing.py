@@ -243,6 +243,53 @@ class ArithmeticSecretSharing(SecretSharingBase):
         :rtype: ArithmeticSecretSharing
         :raises TypeError: If `other` is not of a supported type.
         """
+        from NssMPC.secure_model.utils import mp_broadcast_to
+        if isinstance(other, int):
+            if other == 1:
+                return self
+            
+            # --- 【核心修改开始】 ---
+            # 1. 记录原始形状
+            original_shape = self.shape
+            
+            # 2. 压扁成 2D [N, 1]
+            # 这样 truncate 函数内部的 _wraps 就能接收到 2D 数据
+            self_flat = self.reshape(-1, 1)
+            
+            # 3. 在 2D 上执行截断
+            # 注意：这里的 truncate 是导入的函数
+            res_flat = truncate(self_flat, other)
+            
+            # 4. 还原原始形状
+            res = res_flat.reshape(original_shape)
+            
+            return res
+            # --- 【核心修改结束】 ---
+            
+        elif isinstance(other, float):
+            if other == 1:
+                return self
+            from NssMPC.config import float_scale
+            return (self / int(other * float_scale)) * float_scale
+            
+        elif isinstance(other, ArithmeticSecretSharing):
+            return secure_div(self, other)
+            
+        elif isinstance(other, RingTensor):
+            # 这种情况也需要处理
+            # 假设 other (RingTensor) 也是高维的，也需要压扁
+            original_shape = self.shape
+            
+            self_flat = self.reshape(-1, 1)
+            # 确保 other 也被正确广播和压扁
+            other_expanded_flat = mp_broadcast_to(other, original_shape).reshape(-1, 1)
+            
+            res_flat = truncate(self_flat * other.scale, other_expanded_flat) # 模拟除法
+            
+            res = res_flat.reshape(original_shape)
+            return res
+        else:
+            raise TypeError(f"unsupported operand type(s) for / '{type(self)}' and {type(other)}")
         if isinstance(other, int):
             if other == 1:
                 return self
@@ -499,20 +546,38 @@ class ArithmeticSecretSharing(SecretSharingBase):
         """
         return share_0.item + share_1.item
 
+    # def restore(self):
+    #     """
+    #      Restore the original data from secret shares.
+
+    #      This method is used to reconstruct the original data by combining the shares
+    #      held by different parties. It requires communication between the parties.
+
+    #      :returns: The reconstructed original data as a RingTensor.
+    #      :rtype: RingTensor
+    #      """
+    #     PartyRuntime.party.send(self)
+    #     other = PartyRuntime.party.receive()
+    #     return self.item + other.item
+    
     def restore(self):
         """
-         Restore the original data from secret shares.
-
-         This method is used to reconstruct the original data by combining the shares
-         held by different parties. It requires communication between the parties.
-
-         :returns: The reconstructed original data as a RingTensor.
-         :rtype: RingTensor
-         """
-        PartyRuntime.party.send(self)
-        other = PartyRuntime.party.receive()
+        通过通信恢复原始数据。
+        为了避免死锁，我们规定 party_id 较小的一方先发送，另一方先接收。
+        """
+        party = PartyRuntime.party
+        
+        # --- 核心修改：引入非对称的收发逻辑 ---
+        if party.party_id == 0:
+            # 服务器 (Party 0) 的逻辑：先发送，后接收
+            party.send(self)
+            other = party.receive()
+        else:
+            # 客户端 (Party 1) 的逻辑：先接收，后发送
+            other = party.receive()
+            party.send(self)
         return self.item + other.item
-
+    
     @classmethod
     def share(cls, tensor: RingTensor, num_of_party: int = 2):
         """

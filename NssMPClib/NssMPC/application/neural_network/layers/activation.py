@@ -212,23 +212,42 @@ class SecGELU(torch.nn.Module):
     def __init__(self, approximate='none'):
         super(SecGELU, self).__init__()
 
+    # def forward(self, x):
+    #     """
+    #     First check if x is the ArithmeticSecretSharing type, then check x's device:
+    #         If on a CPU, call :func:`_gelu_forward_cpu(x)` for processing.
+    #         If on a GPU, call :func:`_gelu_forward_gpu(x)` for processing.
+
+    #     :param x: The input tensor
+    #     :type x: RingTensor
+    #     :return: The result of GELU operations performed on CPU or GPU vendors
+    #     :rtype: RingTensor
+    #     """
+    #     assert isinstance(x, ArithmeticSecretSharing), f"unsupported data type(s) for GeLU: {type(x)}"
+    #     if x.device == 'cpu':
+    #         return _gelu_forward_cpu(x)
+    #     else:
+    #         return _gelu_forward_gpu(x)
     def forward(self, x):
         """
-        First check if x is the ArithmeticSecretSharing type, then check x's device:
-            If on a CPU, call :func:`_gelu_forward_cpu(x)` for processing.
-            If on a GPU, call :func:`_gelu_forward_gpu(x)` for processing.
-
-        :param x: The input tensor
-        :type x: RingTensor
-        :return: The result of GELU operations performed on CPU or GPU vendors
-        :rtype: RingTensor
+        The forward propagation process with dual logic for dummy and secure modes.
         """
-        assert isinstance(x, ArithmeticSecretSharing), f"unsupported data type(s) for GeLU: {type(x)}"
-        if x.device == 'cpu':
-            return _gelu_forward_cpu(x)
-        else:
-            return _gelu_forward_gpu(x)
+        # 导入必要的模块
+        import torch
+        import torch.nn.functional as F
+        from NssMPC import ArithmeticSecretSharing
 
+        # --- 核心修改：根据输入 x 的类型，选择不同的执行路径 ---
+
+        if isinstance(x, torch.Tensor):
+            return F.gelu(x)
+
+        else:
+            assert isinstance(x, ArithmeticSecretSharing), f"unsupported data type(s) for GeLU: {type(x)}"
+            if x.device == 'cpu':
+                return _gelu_forward_cpu(x)
+            else:
+                return _gelu_forward_gpu(x)
 
 def _SecGELU(x):
     """
@@ -262,25 +281,41 @@ class SecSoftmax(torch.nn.Module):
         super(SecSoftmax, self).__init__()
         self.dim = dim
 
+    # def forward(self, x):
+    #     """
+    #     First calculate the maximum value of the specified dimension to avoid the problem of value overflow. The
+    #     maximum value is then subtracted from the original input to calculate the negative exponent of each element.
+    #     Finally, the sum of all negative exponents is calculated, and the dimensional consistency is maintained by
+    #     unsqueeze.
+
+    #     :param x: The input tensor
+    #     :type x: RingTensor
+    #     :return: Divide the negative exponent by the sum.
+    #     :rtype: RingTensor
+    #     """
+    #     max_x = x.__class__.max(x, dim=self.dim)
+    #     delta_x = x - max_x
+    #     neg_exp_x = x.__class__.exp(delta_x)
+    #     sum_neg_exp_x = neg_exp_x.sum(dim=self.dim).unsqueeze(self.dim)
+
+    #     return neg_exp_x / sum_neg_exp_x
     def forward(self, x):
         """
-        First calculate the maximum value of the specified dimension to avoid the problem of value overflow. The
-        maximum value is then subtracted from the original input to calculate the negative exponent of each element.
-        Finally, the sum of all negative exponents is calculated, and the dimensional consistency is maintained by
-        unsqueeze.
-
-        :param x: The input tensor
-        :type x: RingTensor
-        :return: Divide the negative exponent by the sum.
-        :rtype: RingTensor
+        The forward propagation process with dual logic for dummy and secure modes.
         """
-        max_x = x.__class__.max(x, dim=self.dim)
-        delta_x = x - max_x
-        neg_exp_x = x.__class__.exp(delta_x)
-        sum_neg_exp_x = neg_exp_x.sum(dim=self.dim).unsqueeze(self.dim)
+        import torch
+        
+        if isinstance(x, torch.Tensor):
+            return torch.softmax(x, dim=self.dim)
 
-        return neg_exp_x / sum_neg_exp_x
+        else:
+            max_x = x.__class__.max(x, dim=self.dim)
+            delta_x = x - max_x
+            neg_exp_x = x.__class__.exp(delta_x)
+            
+            sum_neg_exp_x = neg_exp_x.sum(dim=self.dim).unsqueeze(self.dim)
 
+            return neg_exp_x / sum_neg_exp_x
 
 def _SecSoftmax(x):
     """

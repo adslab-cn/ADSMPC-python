@@ -67,7 +67,7 @@ def beaver_for_linear(x, weight, num_of_triples):
     :type num_of_triples: int
     """
 
-    weight = weight.T
+    #weight = weight.T
     if isinstance(PartyRuntime.party, SemiHonestCS):
         return MatmulTriples.gen(num_of_triples, x.shape, weight.shape)
     elif isinstance(PartyRuntime.party, HonestMajorityParty):

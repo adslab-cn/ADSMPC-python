@@ -5,7 +5,7 @@
 import torch
 import torch.utils.data
 
-from NssMPC.application.neural_network.utils.converter import gen_mat_beaver, image2tensor
+from NssMPC.application.neural_network.utils.converter import gen_key, image2tensor
 from NssMPC.common.utils import bytes_convert
 from NssMPC.config.configs import DEBUG_LEVEL
 from NssMPC.crypto.aux_parameter import MatmulTriples
@@ -13,8 +13,8 @@ from NssMPC.crypto.primitives.arithmetic_secret_sharing import ArithmeticSecretS
 from NssMPC.crypto.protocols.replicated_secret_sharing.honest_majority_functional import *
 from NssMPC.secure_model.mpc_party import SemiHonest3PCParty, HonestMajorityParty, SemiHonestCS
 from NssMPC.secure_model.utils.param_provider import ParamProvider
-
-
+from NssMPC.secure_model.utils.param_provider.fss_key_provider import FSSKeyProvider
+from NssMPC.crypto.aux_parameter import GeLUKey
 class NeuralNetworkCS(SemiHonestCS):
     """
     一个基于客户端-服务器架构的神经网络类，继承自SemiHonestCS。它的主要功能是支持用于训练和推理的神经网络模型的安全多方计算，确保在保护数据隐私的环境中执行计算。
@@ -37,6 +37,7 @@ class NeuralNetworkCS(SemiHonestCS):
         self.set_multiplication_provider()
         self.set_comparison_provider()
         self.set_nonlinear_operation_provider()
+        self.append_provider(FSSKeyProvider(param_type=GeLUKey))
 
     def activate_by_gelu(self):
         """
@@ -44,10 +45,9 @@ class NeuralNetworkCS(SemiHonestCS):
 
         Use :meth:`~NssMPC.secure_model.mpc_party.party.Party.append_provider` to add the ability to provide parameters to the Party.
         """
-        from NssMPC.crypto.aux_parameter import GeLUKey
         self.append_provider(ParamProvider(param_type=GeLUKey))
 
-    def dummy_model(self, inputs):
+    def dummy_model(self, *args):
         """
         Simulate the model. Generate in advance the parameters needed like the triples for the matrix multiplication.
 
@@ -67,36 +67,61 @@ class NeuralNetworkCS(SemiHonestCS):
         """
         num = 1
         self.wait()
+        
         if self.type == 'server':
-            # 模型提供方
+            # === Server 端逻辑 ===
+            # Server 传入的第一个参数应该是模型 (net)
+            if len(args) == 0:
+                raise ValueError("Server must pass the model to dummy_model")
+            model = args[0]
+            
+            # 接收 Client 发来的 batch size
             num = self.receive().item()
 
             if DEBUG_LEVEL != 2:
                 dummy_input = self.receive()
-                mat_beaver_lists = gen_mat_beaver(dummy_input=dummy_input.to('cpu'), model=inputs, num_of_triples=num)
+                
+                if isinstance(dummy_input, list):
+                    dummy_input = tuple(dummy_input)
+                mat_beaver_lists,fss_key = gen_key(dummy_input=dummy_input, model=model, num_of_triples=num)
+                
                 self.providers[MatmulTriples.__name__].param = mat_beaver_lists.pop()
                 self.send(mat_beaver_lists.pop())
+                self.providers[GeLUKey.__name__].param = fss_key.pop()
+                self.send(fss_key.pop())
 
         if self.type == 'client':
-            # 数据提供方
-            if isinstance(inputs, torch.Tensor):
-                dummy_input = torch.ones_like(inputs)
-            elif isinstance(inputs, str):
-                dummy_input = torch.ones_like(image2tensor(inputs))
-            elif isinstance(inputs, torch.utils.data.DataLoader):
-                num = len(inputs.dataset) // inputs.batch_size
-                dummy_input = torch.ones_like(enumerate(inputs).__next__()[1][0])
-            else:
-                raise TypeError("unsupported data type:", type(inputs))
+            inputs = args
+            
+            dummy_inputs_list = []
+            
+            for inp in inputs:
+                if isinstance(inp, torch.Tensor):
+                    d_inp = torch.ones_like(inp)
+                elif isinstance(inp, str):
+                    d_inp = torch.ones_like(image2tensor(inp))
+                elif isinstance(inp, torch.utils.data.DataLoader):
+                    num = len(inp.dataset) // inp.batch_size
+                    d_inp = torch.ones_like(enumerate(inp).__next__()[1][0])
+                else:
+                    raise TypeError(f"unsupported data type: {type(inp)}")
+                dummy_inputs_list.append(d_inp)
+            
             self.send(torch.tensor(num))
 
             if DEBUG_LEVEL != 2:
-                self.send(dummy_input)
+                if len(dummy_inputs_list) == 1:
+                    self.send(dummy_inputs_list[0])
+                else:
+                    self.send(dummy_inputs_list)
+                    
                 self.providers[MatmulTriples.__name__].param = self.receive()
+                self.providers[GeLUKey.__name__].param = self.receive()
 
         self.providers[MatmulTriples.__name__].load_mat_beaver()
+        self.providers[GeLUKey.__name__].load_params()
         return num
-
+    
     def inference(self, net, input_shares):
         """
         Used for neural network inference in encrypted environments.

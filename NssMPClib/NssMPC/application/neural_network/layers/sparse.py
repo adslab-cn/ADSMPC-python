@@ -66,16 +66,48 @@ class SecEmbedding(torch.nn.Module):
 
         self.sparse = sparse
 
-    def forward(self, x):
-        """
-        First, use :func:`~NssMPC.application.neural_network.functional.functional.torch2share` to convert the filled input
-        into a column format. Then, Using the **@** operator for matrix multiplication, calculate the dot product between the input ``x`` and the shared weight weight to obtain the embedded output ``z``.
 
-        :param x: Input tensor
-        :type x: ArithmeticSecretSharing or ReplicatedSecretSharing
-        :return: A tensor that contains an embedded vector.
-        :rtype: ArithmeticSecretSharing or ReplicatedSecretSharing
-        """
-        weight = torch2share(self.weight, x.__class__, x.dtype)
-        z = x @ weight
+    def forward(self, x):
+        # 1. 记录原始形状 [Batch, Seq, Vocab] -> [1, 8, 30522]
+        original_shape = x.shape
+        from NssMPC import RingTensor
+        from NssMPC.crypto.primitives import ArithmeticSecretSharing
+        # 2. 准备权重
+        if isinstance(x, torch.Tensor):
+            w = self.weight
+        else:
+            if isinstance(self.weight, (ArithmeticSecretSharing, RingTensor)):
+                w = self.weight
+            else:
+                w = torch2share(self.weight, x.__class__, x.dtype)
+
+        # ================= 【核心修改开始】 =================
+        # 3. 降维打击：如果有 3 维 (Batch, Seq, Feature)，先展平成 2 维 (Batch*Seq, Feature)
+        # 这样矩阵乘法和截断的结果就是 [8, 128]，与三元组形状完美匹配，不会报错
+        is_3d_input = (len(original_shape) == 3)
+        
+        if is_3d_input:
+            # 这里的 -1 会自动计算为 Batch * Seq (例如 1*8=8)
+            # x 变成 [8, 30522]
+            x = x.reshape(-1, original_shape[-1])
+
+        # 4. 执行计算 (此时是 2D @ 2D)
+        # z 的形状将是 [8, 128]
+        z = x @ w
+
+        # 5. 升维还原：变回 [Batch, Seq, Hidden] -> [1, 8, 128]
+        # 这样后续的 LayerNorm 等层就能正常工作了
+        if is_3d_input:
+            # 获取 Embedding 维度 (Hidden Size)
+            # 如果 w 是 SecretSharing，取 item.shape；如果是 Tensor 直接取 shape
+            if hasattr(w, 'shape'):
+                embed_dim = w.shape[1]
+            else:
+                # 兜底：从 self.weight 取，或者从 z.shape 推断
+                embed_dim = self.embedding_dim 
+            
+            # z 是 SecretSharing 对象，支持 reshape
+            z = z.reshape(original_shape[0], original_shape[1], -1)
+        # ================= 【核心修改结束】 =================
+
         return z

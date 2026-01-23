@@ -11,6 +11,7 @@ from NssMPC.common.ring.ring_tensor import *
 from NssMPC.config.configs import DEVICE
 
 
+
 def share_model(model, share_type=22):
     """
     For the model holder.
@@ -119,7 +120,7 @@ def load_model_from_file(net, path, party):
     return load_model(net, param_dict)
 
 
-def load_model(net, param_dict):
+def load_model_old(net, param_dict):
     """
     For the computation party.Load an encryption algorithm model and convert its parameters from ciphertext format to plaintext format.
 
@@ -138,14 +139,43 @@ def load_model(net, param_dict):
     :rtype: torch.nn.Module
     """
     model_file_path = inspect.getsourcefile(net.__class__)
-    exec(sec_format(model_file_path), locals())
-    net = locals()[net.__class__.__name__]()  # TODO: 部分模型创建时需要传入参数
+    local_scope = locals()
+    local_scope['__file__'] = model_file_path
+    exec(sec_format(model_file_path), local_scope)
+    model_cls = locals()[net.__class__.__name__]
+    try:
+        new_net = model_cls()
+    except TypeError:
+        if hasattr(net, 'config'):
+            new_net = model_cls(net.config)
+        else:
+            if 'BERT_CONFIG' in locals():
+                new_net = model_cls(locals()['BERT_CONFIG'])
+            else:
+                raise TypeError(f"无法初始化 {net.__class__.__name__}，因为它需要参数但未找到 config 属性。")
+    net = new_net
     net.train(False)
     for name, param in net.named_parameters():
         if name in param_dict:
             param.data = param_dict[name].to(DEVICE)
     return net
 
+def load_model(net, param_dict):
+    """
+    为计算方加载加密模型权重。
+    此版本只将 torch.Tensor 份额加载到模型参数的 .data 属性中。
+    """
+    net.eval()
+    
+    # 获取模型当前的所有参数
+    current_params = dict(net.named_parameters())
+    
+    for name, param in current_params.items():
+        if name in param_dict:
+            tensor_share = param_dict[name].to(DEVICE)
+            param.data = tensor_share
+            
+    return net
 
 def share_data(*inputs, share_type=22):
     """
@@ -213,7 +243,7 @@ def image2tensor(image_path):
     # return image.to(DEVICE)
 
 
-def gen_mat_beaver(dummy_input, model, num_of_triples, num_of_party=2):
+def gen_key(dummy_input, model, num_of_triples, num_of_party=2):
     """
     For the model holder. By registering a forward hook, you can monitor specific types of layers and generate corresponding Beaver triples for each layer.
 
@@ -267,24 +297,127 @@ def gen_mat_beaver(dummy_input, model, num_of_triples, num_of_party=2):
             list
 
     """
+    from NssMPC.application.neural_network.layers.embedding import SecEmbedding
+    from NssMPC.application.neural_network.layers.activation import SecGELU
+    from NssMPC.crypto.aux_parameter import GeLUKey
+    from NssMPC.application.neural_network.layers.mha import SecBertSelfAttention,SecBertModel
+    from NssMPC.application.neural_network.layers.linear import SecLinear
+    from NssMPC.crypto.aux_parameter import MatmulTriples, RssMatmulTriples
+    from NssMPC.crypto.aux_parameter.beaver_triples.arithmetic_triples import gen_matrix_triples_by_ttp
     mat_beaver_lists = [[] for _ in range(num_of_party)]
+    gelu_lists = [[] for _ in range(num_of_party)]
     from NssMPC.application.neural_network.functional.beaver_for_layers import beaver_for_adaptive_avg_pooling, \
         beaver_for_avg_pooling, beaver_for_linear, beaver_for_conv
 
     def hook_fn(module, input, output):
+        mat_beavers = None
         if isinstance(module, torch.nn.modules.conv.Conv2d):
             mat_beavers = beaver_for_conv(input[0], module.weight, module.padding[0], module.stride[0], num_of_triples)
-        elif isinstance(module, torch.nn.modules.linear.Linear):
+        elif isinstance(module, (torch.nn.modules.linear.Linear,SecLinear)):
+            # mat_beavers = beaver_for_linear(input[0], module.weight, num_of_triples)
+            x_shape = input[0].shape
+            w_shape = module.weight.shape
+            # 关键点：Linear 计算是 x @ w.T，所以生成参数时要把权重形状倒过来
+            # [512, 128] -> [128, 512]
+            w_shape_transposed = (w_shape[1], w_shape[0]) 
+            
+            beavers = gen_matrix_triples_by_ttp(
+                num_of_triples, x_shape, w_shape_transposed, num_of_party
+            )
+            for i in range(num_of_party):
+                mat_beaver_lists[i].append(beavers[i])
+            return # 处理完直接返回，不走下面的逻辑
+
+        elif isinstance(module, SecEmbedding):
+            # 复用 beaver_for_linear 逻辑，因为 Embedding 计算也是 x @ weight
+            # 注意 SecEmbedding 的 forward 里是 x @ weight，而 Linear 是 x @ weight.T
+            # 这里需要特别注意形状。
+            # SecEmbedding: input [B, S, V], weight [V, H] -> output [B, S, H]
+            # 对应的矩阵乘法是 (B*S, V) x (V, H)
+            
+            x_shape = input[0].shape # [Batch, Seq, Vocab]
+            w_shape = module.weight.shape # [Vocab, Hidden]
+            
+            # 模拟矩阵乘法形状
+            # 输入展平前两维: [Batch*Seq, Vocab]
+            x_reshaped = (x_shape[0] * x_shape[1], x_shape[2])
+            
+            # 生成三元组 (A, B, C)
+            # A: [Batch*Seq, Vocab], B: [Vocab, Hidden], C: [Batch*Seq, Hidden]
+            # MatmulTriples.gen 生成的是 [num_triples] 个列表
+            # 我们需要生成 num_triples 组参数
+            
+            # 直接调用底层生成逻辑
+            beavers = MatmulTriples.gen(
+                num_of_triples, x_reshaped, w_shape, num_of_party
+            )
+            
+            # 手动添加到列表并返回
+            for i in range(num_of_party):
+                mat_beaver_lists[i].append(beavers[i])
+            return
+
+        # 4. Pooling
+        elif isinstance(module, torch.nn.modules.pooling.AvgPool2d):
+            mat_beavers = beaver_for_avg_pooling(input[0], module.kernel_size, module.padding, module.stride, num_of_triples)
+        elif isinstance(module, torch.nn.modules.pooling.AdaptiveAvgPool2d):
+            mat_beavers = beaver_for_adaptive_avg_pooling(input[0], module.output_size, num_of_triples)
+            
+        # 5. SecBertSelfAttention (裸矩阵乘法)
+        
+        elif isinstance(module, SecBertSelfAttention):
+            # 获取维度信息
+            # input[0] 是 hidden_states: [Batch, Seq, Hidden]
+            batch_size = input[0].shape[0]
+            seq_len = input[0].shape[1]
+            num_heads = module.num_attention_heads
+            head_dim = module.head_dim # 注意你的类里叫 head_dim
+            
+            # --- 乘法 1: Scores = Q @ K.T ---
+            # Q: [Batch, Heads, Seq, HeadDim]
+            # K.T: [Batch, Heads, HeadDim, Seq]
+            shape_q = (batch_size, num_heads, seq_len, head_dim)
+            shape_kt = (batch_size, num_heads, head_dim, seq_len)
+            
+            beavers_1 = MatmulTriples.gen(
+                num_of_triples, shape_q, shape_kt, num_of_party
+            )
+            
+            # --- 乘法 2: Context = Prob @ V ---
+            # Prob: [Batch, Heads, Seq, Seq]
+            # V: [Batch, Heads, Seq, HeadDim]
+            shape_prob = (batch_size, num_heads, seq_len, seq_len)
+            shape_v = (batch_size, num_heads, seq_len, head_dim)
+            
+            beavers_2 = MatmulTriples.gen(
+                num_of_triples, shape_prob, shape_v, num_of_party
+            )
+            
+            # 按顺序添加
+            for i in range(num_of_party):
+                mat_beaver_lists[i].append(beavers_1[i])
+                mat_beaver_lists[i].append(beavers_2[i])
+            return
+
+
+
+    
+        elif isinstance(module, SecEmbedding):
             mat_beavers = beaver_for_linear(input[0], module.weight, num_of_triples)
         elif isinstance(module, torch.nn.modules.pooling.AvgPool2d):
             mat_beavers = beaver_for_avg_pooling(input[0], module.kernel_size, module.padding, module.stride,
                                                  num_of_triples)
         elif isinstance(module, torch.nn.modules.pooling.AdaptiveAvgPool2d):
             mat_beavers = beaver_for_adaptive_avg_pooling(input[0], module.output_size, num_of_triples)
+        elif isinstance(module, SecGELU):
+            fss_key_0,fss_key_1 = GeLUKey.gen(input[0].numel())
+            gelu_lists[0].append(fss_key_0)
+            gelu_lists[1].append(fss_key_1)
         else:
             return
-        for i in range(num_of_party):
-            mat_beaver_lists[i].append(mat_beavers[i])
+        if mat_beavers:
+            for i in range(num_of_party):
+                mat_beaver_lists[i].append(mat_beavers[i])
 
     def register_hooks(module, hook):
         """
@@ -299,19 +432,37 @@ def gen_mat_beaver(dummy_input, model, num_of_triples, num_of_party=2):
         :return: a function registered a hook.
         :rtype: list
         """
+        # hooks = []
+        # for child in module.children():
+        #     hooks.append(child.register_forward_hook(hook))
+        #     hooks += register_hooks(child, hook)
+        #     print(str(child))
+        
+        # return hooks
         hooks = []
-        for child in module.children():
-            hooks.append(child.register_forward_hook(hook))
-            hooks += register_hooks(child, hook)
+    
+        # 策略：我们不递归，而是利用 model.named_modules() 一次性遍历所有层
+        # 这样可以精确控制谁注册，谁不注册
+        for name, layer in model.named_modules():
+            if layer is model: continue # 跳过顶层
+            
+            should_hook = False
+            # 检查是否是目标层
+            if isinstance(layer, (torch.nn.Conv2d, torch.nn.Linear, SecLinear, SecEmbedding, 
+                                torch.nn.AvgPool2d, torch.nn.AdaptiveAvgPool2d, SecBertSelfAttention,SecGELU)):
+                should_hook = True
+                
+            if should_hook:
+                hooks.append(layer.register_forward_hook(hook_fn))
         return hooks
-
     hooks = register_hooks(model, hook_fn)
-    model(dummy_input)
+    model.to(DEVICE)
+    model(*dummy_input)
 
     for hook in hooks:
         hook.remove()
 
-    return mat_beaver_lists
+    return mat_beaver_lists,gelu_lists
 
 
 def embedding_preparation(inputs, each_embedding_size):
