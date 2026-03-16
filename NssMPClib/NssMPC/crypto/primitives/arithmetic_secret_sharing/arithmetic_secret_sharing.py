@@ -154,6 +154,8 @@ class ArithmeticSecretSharing(SecretSharingBase):
         """
         if isinstance(other, ArithmeticSecretSharing):
             res = beaver_mul(self, other)
+            if self.dtype=="int" or other.dtype=="int":
+                return res
         elif isinstance(other, RingTensor):
             res = ArithmeticSecretSharing(RingTensor.mul(self.item, other))
         elif isinstance(other, int):
@@ -247,24 +249,11 @@ class ArithmeticSecretSharing(SecretSharingBase):
         if isinstance(other, int):
             if other == 1:
                 return self
-            
-            # --- 【核心修改开始】 ---
-            # 1. 记录原始形状
             original_shape = self.shape
-            
-            # 2. 压扁成 2D [N, 1]
-            # 这样 truncate 函数内部的 _wraps 就能接收到 2D 数据
             self_flat = self.reshape(-1, 1)
-            
-            # 3. 在 2D 上执行截断
-            # 注意：这里的 truncate 是导入的函数
             res_flat = truncate(self_flat, other)
-            
-            # 4. 还原原始形状
             res = res_flat.reshape(original_shape)
-            
             return res
-            # --- 【核心修改结束】 ---
             
         elif isinstance(other, float):
             if other == 1:

@@ -48,12 +48,17 @@ class SecEmbedding(torch.nn.Module):
         original_shape = x.shape
         if isinstance(x, torch.Tensor):
             z = x @ self.weight
+            #print("plain start"+"="*30)
+            #print(x)
+            #print(self.weight)
+            #print(z)    
+            #print("plain end"+"="*30)
         else:
             if isinstance(self.weight, (ArithmeticSecretSharing, RingTensor)):
                 weight = self.weight
+
             else:
                 weight = torch2share(self.weight, x.__class__, x.dtype)
-            # ================= 【核心修复】 =================
             # 3. 动态压扁 (Flatten)
             # 将 [Batch, Seq, Vocab] -> [Batch*Seq, Vocab] (即 [8, 30522])
             # 这样做是为了匹配离线生成的 2D 三元组和截断密钥
@@ -73,8 +78,13 @@ class SecEmbedding(torch.nn.Module):
             target_shape = original_shape[:-1] + (hidden_size,)
             
             z = z_flat.reshape(*target_shape)
+            #print("secret start"+"="*30)
+            #print(x.restore().convert_to_real_field())
+            #print(weight.restore().convert_to_real_field())
+            #print(z.restore().convert_to_real_field())    
+            #print("secret end"+"="*30)
             # ===============================================
-            #z = x @ weight      
+            #z = x @ weight
         return z
 
 
@@ -97,11 +107,8 @@ class SecBertEmbeddings(torch.nn.Module):
     def forward(self, input_oh, pos_oh, type_oh):
         # 1. 分别计算三种 embedding
         #    每个 one-hot 张量与对应的 embedding 权重矩阵相乘
-        #print("1")
         words_embeds = self.word_embeddings(input_oh)
-        #print("2")
         position_embeds = self.position_embeddings(pos_oh)
-        #print("3")
         token_type_embeds = self.token_type_embeddings(type_oh)
         #print("4")
         # 2. 将三种 embedding 相加
@@ -109,7 +116,26 @@ class SecBertEmbeddings(torch.nn.Module):
         embeddings = words_embeds + position_embeds + token_type_embeds
         #print("5")
         # 3. 应用 Layer Normalization
+        if isinstance(embeddings, torch.Tensor):
+            print("Tensor plain before layer norm"+"="*30)
+            print(embeddings)
+        elif isinstance(embeddings, RingTensor):
+            print("RingTensor plain before layer norm"+"="*30)
+            print(embeddings.convert_to_real_field())
+        elif isinstance(embeddings, ArithmeticSecretSharing):
+            print("ArithmeticSecretSharing before layer norm"+"="*30)
+            print(embeddings.restore().convert_to_real_field())
         embeddings = self.LayerNorm(embeddings)
+        
+        if isinstance(embeddings, torch.Tensor):
+            print("Tensor plain after layer norm"+"="*30)
+            print(embeddings)
+        elif isinstance(embeddings, RingTensor):
+            print("RingTensor plain after layer norm"+"="*30)
+            print(embeddings.convert_to_real_field())
+        elif isinstance(embeddings, ArithmeticSecretSharing):
+            print("ArithmeticSecretSharing after layer norm"+"="*30)
+            print(embeddings.restore().convert_to_real_field())
         #print("6")
         # 4. (可选) 应用 Dropout，在 eval() 模式下它什么也不做
         # embeddings = self.dropout(embeddings)

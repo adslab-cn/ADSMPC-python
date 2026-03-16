@@ -29,7 +29,13 @@ def secure_div(x, y):
 
     """
     if x.numel() > y.numel():
-        return x * secure_inv(y)
+        print("="*30)
+        inv_y = secure_inv(y)
+        temp = inv_y.restore()
+        print(temp.convert_to_real_field())
+        res = x * inv_y
+        print("="*30)
+        return res
     else:
         neg_exp2_k = get_neg_exp2_k(y)
         a = x * neg_exp2_k
@@ -50,7 +56,6 @@ def secure_inv(x):
 
     return w * neg_exp2_k * (e0 + 1) * (e1 + 1)
 
-
 def get_neg_exp2_k(divisor):
     div_key = PartyRuntime.party.get_param(DivKey, divisor.numel())
     sigma_key = div_key.sigma_key
@@ -64,4 +69,8 @@ def get_neg_exp2_k(divisor):
     y_minus_powers = [y_shift - (2 ** i) for i in range(1, 2 * SCALE_BIT + 1)]
     k = SigmaDICF.one_key_eval(y_minus_powers, sigma_key, PartyRuntime.party.party_id)
     k = b2a(k, PartyRuntime.party).sum(dim=0)
-    return LookUp.eval(k + 1, nexp2_key.look_up_key, nexp2_key.table)
+    res = LookUp.eval(k + 1, nexp2_key.look_up_key, nexp2_key.table)
+    res.dtype = 'float' 
+    if hasattr(res, 'item'):
+        res.item.dtype = 'float'
+    return res

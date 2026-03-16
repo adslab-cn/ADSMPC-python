@@ -78,64 +78,68 @@ class SecLayerNorm(torch.nn.Module):
         The forward propagation process with dual logic for dummy and secure modes.
         """
         from NssMPC.secure_model.utils import mp_broadcast_to
-        # 导入必要的模块
+        from NssMPC.config.runtime import PartyRuntime
         import torch
         import torch.nn.functional as F
+
         if isinstance(x, torch.Tensor):
             normalized_shape_tuple = (self.normalized_shape,)
             weight_float = self.weight.to(x.dtype)
             bias_float = self.bias.to(x.dtype)
             return F.layer_norm(x, normalized_shape_tuple, weight_float, bias_float, self.eps)
 
+        # --- 密文模式 ---
         else:
-            # print("11")
-            # mean = x.sum(dim=-1).unsqueeze(-1) / self.normalized_shape
-            # print("12")
-            # z = x - mean
-            # print("13")
-            # inv_sqrt_variance = x.__class__.rsqrt(((z * z).sum(dim=-1).unsqueeze(-1)) / self.normalized_shape)
-            # print("14")
-            # weight = torch2share(self.weight, x.__class__, x.dtype)
-            # print("15")
-            # bias = torch2share(self.bias, x.__class__, x.dtype)
-            # print("16")
-            # z = z * inv_sqrt_variance * weight + bias
-            # print("17")
-            # return z
-            mean = x.sum(dim=-1).unsqueeze(-1) / self.normalized_shape
-            
-            # 2. 中心化 [Batch, Seq, Hidden]
-            z = x - mean
-            
-            # 3. 计算方差倒数平方根 [Batch, Seq, 1]
-            inv_sqrt_variance = x.__class__.rsqrt(((z * z).sum(dim=-1).unsqueeze(-1)) / self.normalized_shape)
-            
-            # ================== 【核心修改开始】 ==================
-            # 问题：inv_sqrt_variance 是 [1, 8, 1]，而 z 是 [1, 8, 128]
-            # 密文乘法不支持自动广播，必须手动 expand
-            inv_sqrt_variance = mp_broadcast_to(inv_sqrt_variance, z.shape)
-            
-            # 4. 获取权重
-            weight = torch2share(self.weight, x.__class__, x.dtype)
-            bias = torch2share(self.bias, x.__class__, x.dtype)
-            
-            # 权重也要处理广播 (上次我们处理过，这里再加强一下)
-            # weight 原本是 [128]，需要变成 [1, 1, 128] 然后 expand 到 [1, 8, 128]
-            # 或者是直接利用 RingTensor 的 expand
-            if weight.shape != z.shape:
-                # 先把维度数量对齐 (例如从 [128] -> [1, 1, 128])
-                view_shape = [1] * (len(z.shape) - 1) + [-1]
-                weight = weight.reshape(view_shape)
-                bias = bias.reshape(view_shape)
-                # 再撑大到和 z 一样
-                weight = weight.expand(z.shape)
-                bias = bias.expand(z.shape)
-            # ================== 【核心修改结束】 ==================
+            # 判断当前身份，用于控制打印
+            is_server = (PartyRuntime.party.type == 'server')
 
-            # 5. 执行计算
-            # 现在所有参与运算的变量都是 [1, 8, 128] 了
-            # beaver_mul 里的 b.reshape(y.shape) 就变成了 b.reshape([1, 8, 128])
-            # 1024 对 1024，完美匹配！
-            z = z * inv_sqrt_variance * weight + bias
+            def debug_print(tag, tensor_share):
+                """
+                内部辅助函数：双方同时调用 restore() 避免死锁，但只在 Server 端打印真实值
+                """
+                # 这一步包含了 send 和 receive，Client 和 Server 必须同时执行！
+                restored = tensor_share.restore()
+                if is_server:
+                    print(f"\n--- [SecLayerNorm Debug] {tag} ---")
+                    print(restored.convert_to_real_field())
+
+            # 提前计算维度的浮点数倒数
+            inv_shape = 1.0 / float(self.normalized_shape)
+
+            # --- 1. 计算均值 ---
+            sum_x = x.sum(dim=-1).unsqueeze(-1)
+            mean = sum_x * inv_shape
+            # debug_print("1. Mean", mean)
+
+            # --- 2. 中心化 ---
+            z = x - mean
+            # debug_print("2. Centered Z (x - mean)", z)
+
+            # --- 3. 计算方差 ---
+            var = (z * z).sum(dim=-1).unsqueeze(-1) * inv_shape + self.eps
+            # debug_print("3. Variance (var)", var)
+
+            # --- 4. 计算标准差倒数 (极易发散的危险区) ---
+            inv_sqrt_variance = x.__class__.rsqrt(var)
+            # debug_print("4. Rsqrt (inv_sqrt_variance)", inv_sqrt_variance)
+            from NssMPC import RingTensor
+            # --- 5. 加载权重并广播 ---
+            weight_ring = RingTensor(self.weight.data, dtype='float')
+            weight_share = x.__class__(weight_ring)
+
+            bias_ring = RingTensor(self.bias.data, dtype='float')
+            bias_share = x.__class__(bias_ring)
+
+            inv_sqrt_variance_bcast = mp_broadcast_to(inv_sqrt_variance, z.shape)
+            weight_bcast = mp_broadcast_to(weight_share, z.shape)
+            bias_bcast = mp_broadcast_to(bias_share, z.shape)
+
+            # --- 6. 最终的缩放和平移 ---
+            normalized_z = z * inv_sqrt_variance_bcast
+            # debug_print("5. Normalized Z", normalized_z)
+
+            scaled_z = normalized_z * weight_bcast
+            final_z = scaled_z + bias_bcast
+            # debug_print("6. Final Z", final_z)
             
-            return z
+            return final_z

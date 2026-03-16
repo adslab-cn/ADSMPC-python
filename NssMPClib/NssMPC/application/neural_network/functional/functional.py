@@ -5,7 +5,7 @@
 from NssMPC.crypto.primitives.arithmetic_secret_sharing import ReplicatedSecretSharing
 from NssMPC.common.ring.ring_tensor import RingTensor
 from NssMPC.crypto.primitives.arithmetic_secret_sharing import ArithmeticSecretSharing
-
+import torch
 
 def img2col_for_conv(img, k_size: int, stride: int):
     """
@@ -65,7 +65,17 @@ def torch2share(param, share_type, dtype):
     :raises ValueError: If ``share_type`` is invalid
     """
     if share_type == ArithmeticSecretSharing:
-        return ArithmeticSecretSharing(RingTensor(param, dtype))
+        if isinstance(dtype, torch.dtype):
+            # 如果是浮点类型
+            if dtype.is_floating_point:
+                dtype_str = 'float'
+            # 否则是整数类型
+            else:
+                dtype_str = 'int'
+        else:
+            # 如果传进来的已经是 'int' 或 'float' 字符串，保持不变
+            dtype_str = dtype
+        return ArithmeticSecretSharing(RingTensor(param, dtype_str))
     elif share_type == ReplicatedSecretSharing:
         return ReplicatedSecretSharing([RingTensor(param[0], dtype), RingTensor(param[1], dtype)])
     else:

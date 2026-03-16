@@ -92,29 +92,46 @@ def _gelu_select_eval(x_shift: RingTensor, s_shift, key, r_in_1, r_in_2, party):
 def _gelu_forward_gpu(x):
     """
     This function is used to calculate the value of GeLU(x) on the GPU.
-
-    First, GeLU's required key parameters, including ``sigma_key``, ``select_lin_key``, and ``select_key``, are obtained from ``x``'s
-    participant, and then ``x`` is encrypted (offset) and scaled to obtain ``y_shift``, The values of ``d`` and ``w`` are obtained by
-    method :meth:`~NssMPC.crypto.primitives.function_secret_sharing.dicf.SigmaDICF.one_key_eval`, and the two are offset after extracted. Calculate the result ``c`` of the linear selection using
-    the :meth:`~NssMPC.crypto.protocols.selection.selectlin.SelectLin.eval` method, perform the nonlinear calculation with :func:`_gelu_select_eval` to get ``relu_x``, ``look_up_key`` is
-    used to obtain the calculated value in ``gelu_key.look_up_table``.
-
-    :param x: Input an ASS to represent the value that needs to be computed with GeLU.
-    :type x: ArithmeticSecretSharing
-    :return: The Computational Results of GeLU
-    :rtype: ArithmeticSecretSharing
+    带有明密文对照打印的 Debug 版本。
     """
+    import torch.nn.functional as F
+    from NssMPC.config.runtime import PartyRuntime
+
     table_scale_bit = GELU_TABLE_BIT
     shape = x.shape
-    x = x.flatten()
 
-    gelu_key = PartyRuntime.party.get_param(GeLUKey, x.numel())
+    is_server = (PartyRuntime.party.type == 'server')
+
+    def debug_print(tag, tensor_share):
+        """
+        内部辅助函数：双方同时调用 restore() 避免死锁，但只在 Server 端打印真实值
+        """
+        restored = tensor_share.restore()
+        if is_server:
+            real_val = restored.convert_to_real_field()
+            print(f"\n--- [_gelu_forward_gpu Debug] {tag} ---")
+            # 截取前 10 个数据展示，避免输出刷屏，如果要看全部可以直接 print(real_val)
+            print(real_val.flatten()[:10]) 
+            return real_val
+        return None
+
+    # =====================================================================
+    # 1. 打印输入，并在 Server 端利用明文数据算出“标准答案”作为对照！
+    # =====================================================================
+    real_x = debug_print("1. Input x", x)
+    if is_server:
+        print("\n--- [_gelu_forward_gpu Debug] Expected Plaintext F.gelu(x) (标准答案) ---")
+        print(F.gelu(real_x).flatten()[:10])
+
+    x_flat = x.flatten()
+
+    gelu_key = PartyRuntime.party.get_param(GeLUKey, x_flat.numel())
     sigma_key = gelu_key.sigma_key
     select_lin_key = gelu_key.select_lin_key
     select_key = gelu_key.select_key
 
     x_r_in = gelu_key.sigma_key.r_in
-    x_shift = ArithmeticSecretSharing(x_r_in) + x.flatten()
+    x_shift = ArithmeticSecretSharing(x_r_in) + x_flat
     x_shift = x_shift.restore()
 
     y_shift = x_shift // (x.scale // (2 ** table_scale_bit))
@@ -146,7 +163,26 @@ def _gelu_forward_gpu(x):
     relu_x = _gelu_select_eval(x_shift, s_shift, select_key, select_lin_key.d, x_r_in, PartyRuntime.party)
     relu_x.dtype = x.dtype
 
-    return (relu_x - LookUp.eval(c, gelu_key.look_up_key, gelu_key.look_up_table)).reshape(shape)
+    # =====================================================================
+    # 2. 打印中间变量 relu_x (在 Sigma GeLU 的数学原理中，这一步算出来的是近似的 ReLU(x))
+    # =====================================================================
+    debug_print("2. Intermediate relu_x (理论上应等于近似的 ReLU(x))", relu_x)
+
+    lookup_res = LookUp.eval(c, gelu_key.look_up_key, gelu_key.look_up_table)
+    
+    # =====================================================================
+    # 3. 打印查表补偿结果 (如果查表越界，这里会算出乱七八糟的值)
+    # =====================================================================
+    debug_print("3. Intermediate lookup_res (查表补偿项)", lookup_res)
+
+    final_res = (relu_x - lookup_res).reshape(shape)
+    
+    # =====================================================================
+    # 4. 打印 MPC 计算的最终结果
+    # =====================================================================
+    debug_print("4. Final MPC GeLU Output", final_res)
+
+    return final_res
 
 
 class SecReLU(torch.nn.Module):
@@ -312,11 +348,10 @@ class SecSoftmax(torch.nn.Module):
             max_x = x.__class__.max(x, dim=self.dim)
             delta_x = x - max_x
             neg_exp_x = x.__class__.exp(delta_x)
-            
             sum_neg_exp_x = neg_exp_x.sum(dim=self.dim).unsqueeze(self.dim)
-
-            return neg_exp_x / sum_neg_exp_x
-
+            res =  neg_exp_x / sum_neg_exp_x
+            return res
+        
 def _SecSoftmax(x):
     """
     * The implementation of this method is mainly based on the `paper Sigma <https://eprint.iacr.org/2023/1269.pdf>`_.
