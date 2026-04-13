@@ -74,6 +74,7 @@ class ArithmeticSecretSharing(SecretSharingBase):
 
     def __add__(self, other):
         if isinstance(other, ArithmeticSecretSharing):
+            
             new_tensor = self.item + other.item
             return ArithmeticSecretSharing(new_tensor)
         elif isinstance(other, RingTensor):  # for RingTensor or const number, only party 0 add it to the share tensor

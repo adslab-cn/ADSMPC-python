@@ -283,7 +283,7 @@ class SecGELU(torch.nn.Module):
             if x.device == 'cpu':
                 return _gelu_forward_cpu(x)
             else:
-                return _gelu_forward_gpu(x)
+                return _gelu_forward_cpu(x)
 
 def _SecGELU(x):
     """
