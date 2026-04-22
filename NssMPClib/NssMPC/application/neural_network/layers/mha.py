@@ -54,66 +54,69 @@ class SecBertSelfAttention(nn.Module):
             party_type = "[Server]" if PartyRuntime.party.type == 'server' else "[Client]"
         else:
             party_type = "[Plaintext]"
-        if party_type != "[Client]":
+        debugging = False
+        if party_type != "[Client]" and debugging:
             print(f"{party_type} SecBertSelfAttention.forward: 开始")
         
         q = self.transpose_for_scores(self.query(hidden_states))
-
-        if is_secure_mode:
-            temp = q.restore()
-            if party_type == "[Server]":
-                print(party_type+" is secure: q "+str(is_secure_mode)+"  "+str(temp.convert_to_real_field()))
-        else:
-            print(party_type+" is secure: q "+str(is_secure_mode)+"  "+str(q))
+        if debugging:
+            if is_secure_mode:
+                temp = q.restore()
+                if party_type == "[Server]":
+                    print(party_type+" is secure: q "+str(is_secure_mode)+"  "+str(temp.convert_to_real_field()))
+            else:
+                print(party_type+" is secure: q "+str(is_secure_mode)+"  "+str(q))
 
         k = self.transpose_for_scores(self.key(hidden_states))
-
-        if is_secure_mode:
-            temp = k.restore()
-            if party_type == "[Server]":
-                print(party_type+" is secure: k "+str(is_secure_mode)+"  "+str(temp.convert_to_real_field()))
-        else:
-            print(party_type+" is secure: k "+str(is_secure_mode)+"  "+str(k))
+        if debugging:
+            if is_secure_mode:
+                temp = k.restore()
+                if party_type == "[Server]":
+                    print(party_type+" is secure: k "+str(is_secure_mode)+"  "+str(temp.convert_to_real_field()))
+            else:
+                print(party_type+" is secure: k "+str(is_secure_mode)+"  "+str(k))
         
         v = self.transpose_for_scores(self.value(hidden_states))
 
-        if is_secure_mode:
-            temp = v.restore()
-            if party_type == "[Server]":
-                print(party_type+" is secure: v "+str(is_secure_mode)+"  "+str(temp.convert_to_real_field()))
-        else:
-            print(party_type+" is secure: v "+str(is_secure_mode)+"  "+str(v))
+        if debugging:
+            if is_secure_mode:
+                temp = v.restore()
+                if party_type == "[Server]":
+                    print(party_type+" is secure: v "+str(is_secure_mode)+"  "+str(temp.convert_to_real_field()))
+            else:
+                print(party_type+" is secure: v "+str(is_secure_mode)+"  "+str(v))
         
         scores = (q @ k.transpose(-1, -2)) * (self.head_dim ** -0.5)
         if attention_mask is not None:
             scores = scores + attention_mask
         
-        
-        if is_secure_mode:
-            temp = scores.restore()
-            if party_type == "[Server]":
-                print(party_type+" is secure: scores "+str(is_secure_mode)+"  "+str(temp.convert_to_real_field()))
-        else:
-            print(party_type+" is secure: scores "+str(is_secure_mode)+"  "+str(scores))
+        if debugging:
+            if is_secure_mode:
+                temp = scores.restore()
+                if party_type == "[Server]":
+                    print(party_type+" is secure: scores "+str(is_secure_mode)+"  "+str(temp.convert_to_real_field()))
+            else:
+                print(party_type+" is secure: scores "+str(is_secure_mode)+"  "+str(scores))
         probs = self.softmax(scores)
-
-        if is_secure_mode:
-            temp = probs.restore()
-            if party_type == "[Server]":
-                print(party_type+" is secure: probs "+str(is_secure_mode)+"  "+str(temp.convert_to_real_field()))
-        else:
-            print(party_type+" is secure: probs "+str(is_secure_mode)+"  "+str(probs))
+        if debugging:
+            if is_secure_mode:
+                temp = probs.restore()
+                if party_type == "[Server]":
+                    print(party_type+" is secure: probs "+str(is_secure_mode)+"  "+str(temp.convert_to_real_field()))
+            else:
+                print(party_type+" is secure: probs "+str(is_secure_mode)+"  "+str(probs))
             
         context = (probs @ v).permute(0, 2, 1, 3).contiguous()
         res = context.reshape(*context.shape[:-2], self.hidden_size)
-        if is_secure_mode:
-            temp = res.restore()
-            if party_type == "[Server]":
-                print(party_type+" is secure: res "+str(is_secure_mode)+"  "+str(temp.convert_to_real_field()))
-        else:
-            print(party_type+" is secure: res "+str(is_secure_mode)+"  "+str(res))
-        if party_type != "[Client]":
-            print(f"{party_type} SecBertSelfAttention.forward: 结束")
+        if debugging:
+            if is_secure_mode:
+                temp = res.restore()
+                if party_type == "[Server]":
+                    print(party_type+" is secure: res "+str(is_secure_mode)+"  "+str(temp.convert_to_real_field()))
+            else:
+                print(party_type+" is secure: res "+str(is_secure_mode)+"  "+str(res))
+            if party_type != "[Client]":
+                print(f"{party_type} SecBertSelfAttention.forward: 结束")
         return res
 
 class SecBertSelfOutput(nn.Module):
@@ -146,7 +149,7 @@ class SecBertIntermediate(nn.Module):
     def forward(self, hidden_states):
         from NssMPC.config.runtime import PartyRuntime
         import torch
-
+        debugging = False
         # --- 明文/Dummy 模式 ---
         if isinstance(hidden_states, torch.Tensor):
             dense_out = self.dense(hidden_states)
@@ -163,7 +166,7 @@ class SecBertIntermediate(nn.Module):
                 """
                 # 这一步包含了 send 和 receive，Client 和 Server 必须同时执行！
                 restored = tensor_share.restore()
-                if is_server:
+                if is_server and debugging:
                     print(f"\n--- [SecBertIntermediate Debug] {tag} ---")
                     print(restored.convert_to_real_field())
 
@@ -202,41 +205,45 @@ class SecBertLayer(nn.Module):
 
     def forward(self, hidden_states, attention_mask=None):
         is_secure_mode = isinstance(hidden_states, ArithmeticSecretSharing)
+        debugging = False
         
         party_type = ""
         if is_secure_mode:
             party_type = "[Server]" if PartyRuntime.party.type == 'server' else "[Client]"
         else:
             party_type = "[Plaintext]"
-        if party_type != "[Client]":
+        if party_type != "[Client]" and debugging:
             print(f"{party_type} SecBertLayer.forward: 开始")
         attention_output = self.attention(hidden_states, attention_mask)
-        if is_secure_mode:
-            temp = attention_output.restore()
-            if party_type == "[Server]":
-                print(party_type+" is secure: attention_output "+str(is_secure_mode)+"  "+str(temp.convert_to_real_field()))
-        else:
-            print(party_type+" is secure: attention_output"+str(is_secure_mode)+"  "+str(attention_output))
+        if debugging:
+            if is_secure_mode:
+                temp = attention_output.restore()
+                if party_type == "[Server]":
+                    print(party_type+" is secure: attention_output "+str(is_secure_mode)+"  "+str(temp.convert_to_real_field()))
+            else:
+                print(party_type+" is secure: attention_output"+str(is_secure_mode)+"  "+str(attention_output))
 
 
         intermediate_output = self.intermediate(attention_output)
-        if is_secure_mode:
-            temp = intermediate_output.restore()
-            if party_type == "[Server]":
-                print(party_type+" is secure: intermediate_output "+str(is_secure_mode)+"  "+str(temp.convert_to_real_field()))
-        else:
-            print(party_type+" is secure: intermediate_output"+str(is_secure_mode)+"  "+str(intermediate_output))
+        if debugging:
+            if is_secure_mode:
+                temp = intermediate_output.restore()
+                if party_type == "[Server]":
+                    print(party_type+" is secure: intermediate_output "+str(is_secure_mode)+"  "+str(temp.convert_to_real_field()))
+            else:
+                print(party_type+" is secure: intermediate_output"+str(is_secure_mode)+"  "+str(intermediate_output))
 
 
         layer_output = self.output(intermediate_output, attention_output)
-        if is_secure_mode:
-            temp = layer_output.restore()
-            if party_type == "[Server]":
-                print(party_type+" is secure: layer_output "+str(is_secure_mode)+"  "+str(temp.convert_to_real_field()))
-        else:
-            print(party_type+" is secure: layer_output"+str(is_secure_mode)+"  "+str(layer_output))
-        
-        if party_type != "[Client]":
+        if debugging:
+            if is_secure_mode:
+                temp = layer_output.restore()
+                if party_type == "[Server]":
+                    print(party_type+" is secure: layer_output "+str(is_secure_mode)+"  "+str(temp.convert_to_real_field()))
+            else:
+                print(party_type+" is secure: layer_output"+str(is_secure_mode)+"  "+str(layer_output))
+            
+        if party_type != "[Client]" and debugging:
             print(f"{party_type} SecBertLayer.forward: 结束")
         return layer_output
 
@@ -291,13 +298,14 @@ class SecBertModel(nn.Module):
         # else:
         #     extended_mask = None
         is_secure_mode = isinstance(input_oh, ArithmeticSecretSharing)
+        debugging = False
         
         party_type = ""
         if is_secure_mode:
             party_type = "[Server]" if PartyRuntime.party.type == 'server' else "[Client]"
         else:
             party_type = "[Plaintext]"
-        if party_type != "[Client]":
+        if party_type != "[Client]" and debugging:
             print(f"{party_type} SecBertModel.forward: 开始")
 
         # --- 2. 根据模式处理 Mask ---
@@ -318,47 +326,50 @@ class SecBertModel(nn.Module):
                 extended_mask = (1.0 - attention_mask) * -10000.0
                 extended_mask = extended_mask.unsqueeze(1).unsqueeze(2)
 
-        if party_type != "[Client]":
+        if party_type != "[Client]" and debugging:
             print(f"{party_type} SecBertModel.forward: Before Embeddings")
         embedding_output = self.embeddings(input_oh,  pos_oh, type_oh)
-        if party_type != "[Client]":
+        if party_type != "[Client]" and debugging:
             print(f"{party_type} SecBertModel.forward: After Embeddings")
         
-        if is_secure_mode:
-            temp = embedding_output.restore()
-            if party_type != "[Client]":
-                print(party_type+" is secure: embedding_output "+str(is_secure_mode)+"  "+str(temp.convert_to_real_field()))
-        else:
-            print(party_type+" is secure: embedding_output "+str(is_secure_mode)+"  "+str(embedding_output))
+        if debugging:
+            if is_secure_mode:
+                temp = embedding_output.restore()
+                if party_type != "[Client]":
+                    print(party_type+" is secure: embedding_output "+str(is_secure_mode)+"  "+str(temp.convert_to_real_field()))
+            else:
+                print(party_type+" is secure: embedding_output "+str(is_secure_mode)+"  "+str(embedding_output))
 
-        if party_type != "[Client]":
+        if party_type != "[Client]" and debugging:
             print(f"{party_type} SecBertModel.forward: Before Encoder")
         sequence_output = self.encoder(embedding_output, extended_mask)
-        if party_type != "[Client]":
+        if party_type != "[Client]" and debugging:
             print(f"{party_type} SecBertModel.forward: After Encoder")
 
-        if is_secure_mode:
-            temp = sequence_output.restore()
-            if party_type != "[Client]":
-                print(party_type+" is secure: sequence_output "+str(is_secure_mode)+"  "+str(temp.convert_to_real_field()))
-        else:
-            print(party_type+" is secure: sequence_output "+str(is_secure_mode)+"  "+str(sequence_output))
+        if debugging:
+            if is_secure_mode:
+                temp = sequence_output.restore()
+                if party_type != "[Client]":
+                    print(party_type+" is secure: sequence_output "+str(is_secure_mode)+"  "+str(temp.convert_to_real_field()))
+            else:
+                print(party_type+" is secure: sequence_output "+str(is_secure_mode)+"  "+str(sequence_output))
         
         
-        if party_type != "[Client]":
+        if party_type != "[Client]" and debugging:
             print(f"{party_type} SecBertModel.forward: Before Pooler")
         pooled_output = self.pooler(sequence_output)
-        if party_type != "[Client]":
+        if party_type != "[Client]" and debugging:
             print(f"{party_type} SecBertModel.forward: After Pooler")
 
-        if is_secure_mode:
-            temp = pooled_output.restore()
-            if party_type != "[Client]":
-                print(party_type+" is secure: pooled_output "+str(is_secure_mode)+"  "+str(temp.convert_to_real_field()))
-        else:
-            print(party_type+" is secure: pooled_output "+str(is_secure_mode)+"  "+str(pooled_output))
-        
-        print(f"{party_type} SecBertModel.forward: 结束")
+        if debugging:
+            if is_secure_mode:
+                temp = pooled_output.restore()
+                if party_type != "[Client]":
+                    print(party_type+" is secure: pooled_output "+str(is_secure_mode)+"  "+str(temp.convert_to_real_field()))
+            else:
+                print(party_type+" is secure: pooled_output "+str(is_secure_mode)+"  "+str(pooled_output))
+        if party_type != "[Client]" and debugging:
+            print(f"{party_type} SecBertModel.forward: 结束")
         
         
         return sequence_output, pooled_output

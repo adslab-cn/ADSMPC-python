@@ -415,38 +415,6 @@ def gen_key(dummy_input, model, num_of_triples, num_of_party=2):
             fss_key_0.sigma_key.bit_len = BIT_LEN
             fss_key_1.sigma_key.bit_len = BIT_LEN
             
-            # 如果保险起见，把 select_lin_key 的也补上
-            if hasattr(fss_key_0, 'select_lin_key'):
-                fss_key_0.select_lin_key.bit_len = BIT_LEN
-                fss_key_1.select_lin_key.bit_len = BIT_LEN
-            # ==========================================================
-            # 🔍 [照妖镜]：验证魔改后的 GeLUKey 是否正常！
-            # ==========================================================
-            print("\n" + "="*40)
-            print("🔍 [GeLUKey 生成验证]")
-            print(f"-> 需求生成数量: {input[0].numel()}")
-            
-            # 1. 检查 SigmaDICFKey 的 bit_len (极其容易导致符号算错的元凶)
-            bit_len_0 = getattr(fss_key_0.sigma_key, 'bit_len', '未找到属性')
-            print(f"-> SigmaDICFKey bit_len: {bit_len_0}")
-            
-            # 2. 检查 r_in 的范围是否正常 (它是 x 盲化时的偏移量)
-            r_in_0 = fss_key_0.sigma_key.r_in
-            r_in_1 = fss_key_1.sigma_key.r_in
-            
-            # 【关键修复】：加上 .double() 防止 Long 无法求 mean 报错！
-            real_r_in = (r_in_0 + r_in_1).convert_to_real_field().flatten().double()
-            
-            print(f"-> r_in (盲化掩码) | Mean: {real_r_in.mean().item():.4f} | Max: {real_r_in.max().item():.4f} | Min: {real_r_in.min().item():.4f}")
-            print(f"   局部抽样: {real_r_in[:5]}")
-            # 3. 检查 LookUp Table 是否崩坏
-            table_0 = fss_key_0.look_up_table
-            table_1 = fss_key_1.look_up_table
-            real_table = (table_0 + table_1).convert_to_real_field().flatten()
-            print(f"-> LookUp Table | 总长度: {real_table.shape[0]}")
-            print(f"   表头前5个值: {real_table[:5]}")
-            print(f"   表中间5个值: {real_table[real_table.numel()//2 : real_table.numel()//2+5]}")
-            print("="*40 + "\n")
 
             gelu_lists[0].append(fss_key_0)
             gelu_lists[1].append(fss_key_1)

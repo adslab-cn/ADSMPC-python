@@ -107,6 +107,7 @@ class SecBertEmbeddings(torch.nn.Module):
     def forward(self, input_oh, pos_oh, type_oh):
         # 1. 分别计算三种 embedding
         #    每个 one-hot 张量与对应的 embedding 权重矩阵相乘
+        debugging = False
         words_embeds = self.word_embeddings(input_oh)
         position_embeds = self.position_embeddings(pos_oh)
         token_type_embeds = self.token_type_embeddings(type_oh)
@@ -116,26 +117,27 @@ class SecBertEmbeddings(torch.nn.Module):
         embeddings = words_embeds + position_embeds + token_type_embeds
         #print("5")
         # 3. 应用 Layer Normalization
-        if isinstance(embeddings, torch.Tensor):
-            print("Tensor plain before layer norm"+"="*30)
-            print(embeddings)
-        elif isinstance(embeddings, RingTensor):
-            print("RingTensor plain before layer norm"+"="*30)
-            print(embeddings.convert_to_real_field())
-        elif isinstance(embeddings, ArithmeticSecretSharing):
-            print("ArithmeticSecretSharing before layer norm"+"="*30)
-            print(embeddings.restore().convert_to_real_field())
+        if debugging:
+            if isinstance(embeddings, torch.Tensor):
+                print("Tensor plain before layer norm"+"="*30)
+                print(embeddings)
+            elif isinstance(embeddings, RingTensor):
+                print("RingTensor plain before layer norm"+"="*30)
+                print(embeddings.convert_to_real_field())
+            elif isinstance(embeddings, ArithmeticSecretSharing):
+                print("ArithmeticSecretSharing before layer norm"+"="*30)
+                print(embeddings.restore().convert_to_real_field())
         embeddings = self.LayerNorm(embeddings)
-        
-        if isinstance(embeddings, torch.Tensor):
-            print("Tensor plain after layer norm"+"="*30)
-            print(embeddings)
-        elif isinstance(embeddings, RingTensor):
-            print("RingTensor plain after layer norm"+"="*30)
-            print(embeddings.convert_to_real_field())
-        elif isinstance(embeddings, ArithmeticSecretSharing):
-            print("ArithmeticSecretSharing after layer norm"+"="*30)
-            print(embeddings.restore().convert_to_real_field())
+        if debugging:
+            if isinstance(embeddings, torch.Tensor):
+                print("Tensor plain after layer norm"+"="*30)
+                print(embeddings)
+            elif isinstance(embeddings, RingTensor):
+                print("RingTensor plain after layer norm"+"="*30)
+                print(embeddings.convert_to_real_field())
+            elif isinstance(embeddings, ArithmeticSecretSharing):
+                print("ArithmeticSecretSharing after layer norm"+"="*30)
+                print(embeddings.restore().convert_to_real_field())
         #print("6")
         # 4. (可选) 应用 Dropout，在 eval() 模式下它什么也不做
         # embeddings = self.dropout(embeddings)

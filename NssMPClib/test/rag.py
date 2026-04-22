@@ -26,7 +26,7 @@ BERT_CONFIG = {
 BATCH = 1
 SEQ = 8
 NUM_DOCS = 10  # 知识库的文档库大小
-TOP_K = 2      # 我们想要召回的文档数量
+TOP_K = 5      # 我们想要召回的文档数量
 QUERY_LEN = 8
 SEM_DOC_LEN = 24  # 语义路召回的文档长度
 LEX_DOC_LEN = 24  # BM25路召回的文档长度
@@ -80,13 +80,60 @@ def secure_bm25_scoring_placeholder(client_keywords, server_okvs):
 
 def secure_top_k_retrieval_placeholder(scores_share, doc_embs_share, k):
     """
-    [阶段 2] 密态 Top-K 召回：找出分数最高的 K 个文档。
-    TODO: 这里是你未来要实现 Panther 协议 (ExactTopk/BatchPIR) 的地方！
-    目前为了让代码跑通，我们直接返回前 K 个文档的切片（假装已经选出来了）。
+    [阶段 2] 密态 Top-K 召回 (带全流程追踪和单乘法优化版)
     """
-    # 丑陋的占位符：直接取前 K 篇文档的 Secret Share 返回
-    # 实际上这里应该有一大堆的 secure_ge (密态比较) 或者 PIR 逻辑
-    top_k_docs_share = doc_embs_share[:k] 
+    party = PartyRuntime.party
+    num_docs = doc_embs_share.shape[0]
+    scores_share_1d = scores_share.view(-1)
+    
+    scores_list = [scores_share_1d[i] for i in range(num_docs)]
+    docs_list = [doc_embs_share[i] for i in range(num_docs)]
+
+    for i in range(k):
+        for j in range(num_docs - 1, i, -1):
+            
+            # 1. 密态比较
+            cond = scores_list[j] > scores_list[j-1]
+
+            # 2. 密态交换 (使用优化的单乘法公式，避免 1 - cond 的未知异常)
+            # diff = j的值 - (j-1)的值。
+            # 如果 cond=1 (说明 j 大)，那么 swap_term 就是差值。
+            score_diff = scores_list[j] - scores_list[j-1]
+            score_swap_term = cond * score_diff
+            
+            # (j-1) 加上差值变成大的，j 减去差值变成小的，完成交换。
+            new_score_j_minus_1 = scores_list[j-1] + score_swap_term
+            new_score_j = scores_list[j] - score_swap_term
+
+            # 对文档特征做相同的操作
+            doc_diff = docs_list[j] - docs_list[j-1]
+            doc_swap_term = cond * doc_diff
+
+            new_doc_j_minus_1 = docs_list[j-1] + doc_swap_term
+            new_doc_j = docs_list[j] - doc_swap_term
+
+            # 更新列表
+            scores_list[j] = new_score_j
+            scores_list[j-1] = new_score_j_minus_1
+            docs_list[j] = new_doc_j
+            docs_list[j-1] = new_doc_j_minus_1
+
+            # ====================================================
+            # 【上帝视角】：把当前这一步的排序结果还原出来看看！
+            # ====================================================
+            if party is not None:
+                current_scores_share = ArithmeticSecretSharing.cat([s.unsqueeze(0) for s in scores_list], dim=0)
+                if party.type == 'client':
+                    party.send(current_scores_share)
+                elif party.type == 'server':
+                    c_current_scores = party.receive()
+                    plain_scores = ArithmeticSecretSharing.restore_from_shares(current_scores_share, c_current_scores).convert_to_real_field()
+                    print(f"  [追踪 i={i}, j={j}] 比较了索引 {j} 和 {j-1} 后，当前分数: \n  {plain_scores}")
+
+    top_k_docs_list = docs_list[:k]
+    top_k_docs_expanded = [doc.unsqueeze(0) for doc in top_k_docs_list]
+    top_k_docs_share = ArithmeticSecretSharing.cat(top_k_docs_expanded, dim=0)
+
     return top_k_docs_share
 
 # ==========================================
@@ -94,6 +141,10 @@ def secure_top_k_retrieval_placeholder(scores_share, doc_embs_share, k):
 # ==========================================
 server = NeuralNetworkCS(type='server')
 client = NeuralNetworkCS(type='client')
+
+server.set_comparison_provider()
+client.set_comparison_provider()
+
 for p in [server, client]:
     p.set_multiplication_provider()
     p.set_comparison_provider()
@@ -143,6 +194,8 @@ def run_server():
         print("[Server] 提取 Query 密态 Embedding...")
         _, pool = model(sh_in[0], sh_pos[0], sh_type[0], mask)
         query_emb_share = pool # shape: [1, 128]
+
+        query_emb_share = server.receive()[0]
         
         # ---------------------------------------------------------
         # 4. RAG 核心流程：双路召回 (Dual-Path Retrieval)
@@ -152,22 +205,36 @@ def run_server():
         
         # 【第一路：语义检索 Semantic Path】
         scores_sem_share = secure_distance_computation_placeholder(query_emb_share, my_db_share)
-        top_k_docs_sem_share = secure_top_k_retrieval_placeholder(scores_sem_share, my_db_share, k=1)
+
+        
+        # # ====== 插入测试代码 (Start) ======
+        # # 接收客户端的分数Share，还原成明文，用 PyTorch 算一遍正确答案
+        # c_scores_sem = server.receive()
+        # plain_scores = ArithmeticSecretSharing.restore_from_shares(scores_sem_share, c_scores_sem).convert_to_real_field()
+        # topk_scores_plain, topk_indices_plain = torch.topk(plain_scores, TOP_K) # 取 Top-1
+        # gt_topk_doc = db_embeddings[topk_indices_plain] # 根据真实索引去原数据库拿文档
+        
+        # print("\n[DEBUG - 明文验证] 真实打分结果:", plain_scores)
+        # print("[DEBUG - 明文验证] PyTorch 选出的 Top-1 分数:", topk_scores_plain)
+        # print("[DEBUG - 明文验证] 对应的真实文档特征 (前5维):\n", gt_topk_doc[:, :5])
+
+
+
+        top_k_docs_sem_share = secure_top_k_retrieval_placeholder(scores_sem_share, my_db_share, k=TOP_K)
 
         # 【第二路：词汇检索 BM25 Path】
         server_okvs_mock = None # 随便给个 None 占位，防止报错
         client_keywords = ["apple", "price"] # 模拟客户端输入的词
         scores_lex_share = secure_bm25_scoring_placeholder(client_keywords, server_okvs_mock)
-        top_k_docs_lex_share = secure_top_k_retrieval_placeholder(scores_lex_share, my_db_share, k=1)
+        #top_k_docs_lex_share = secure_top_k_retrieval_placeholder(scores_lex_share, my_db_share, k=1)
 
         # ---------------------------------------------------------
-        # 5. 还原结果进行验证 (这里我们验证一下语义路的结果)
+        # 5. 还原结果进行验证 (这里验证一下语义路的结果)
         # ---------------------------------------------------------
         c_top_k_docs = server.receive()
-        # 注意：这里用 top_k_docs_sem_share 还原
         final_docs = ArithmeticSecretSharing.restore_from_shares(top_k_docs_sem_share, c_top_k_docs)
         print("\n=== [Server] RAG 语义路召回的文档明文 (前两维) ===")
-        print(final_docs.convert_to_real_field()[:, :2])
+        print(final_docs.convert_to_real_field()[:, :5])
         
         print("[Server] 执行 Dummy Model 2 (Seq=56)...")
         server.dummy_model(model_for_dummy)
@@ -264,6 +331,10 @@ def run_client():
         
         _, pool = model(s_ids[0][0], s_pos[0][0], s_typ[0][0], RingTensor.convert_to_ring(mask))
         query_emb_share = pool
+        dummy_query_plain = torch.randn(1, 128).to(DEVICE)
+        s_query_local, s_query_remote = share_data(dummy_query_plain)
+        query_emb_share = s_query_local[0]
+        client.send(s_query_remote)
 
         # ---------------------------------------------------------
         # 4. RAG 核心流程 (参与距离计算 -> 参与召回)
@@ -272,13 +343,16 @@ def run_client():
         
         # 【第一路：语义检索 Semantic Path】
         scores_sem_share = secure_distance_computation_placeholder(query_emb_share, my_db_share)
-        top_k_docs_sem_share = secure_top_k_retrieval_placeholder(scores_sem_share, my_db_share, k=1)
+        
+        # client.send(scores_sem_share)
+
+        top_k_docs_sem_share = secure_top_k_retrieval_placeholder(scores_sem_share, my_db_share, k=TOP_K)
 
         # 【第二路：词汇检索 BM25 Path】
         server_okvs_mock = None 
         client_keywords = ["apple", "price"]
         scores_lex_share = secure_bm25_scoring_placeholder(client_keywords, server_okvs_mock)
-        top_k_docs_lex_share = secure_top_k_retrieval_placeholder(scores_lex_share, my_db_share, k=1)
+        #top_k_docs_lex_share = secure_top_k_retrieval_placeholder(scores_lex_share, my_db_share, k=1)
 
         # ---------------------------------------------------------
         # 5. 配合还原结果 (发送语义路的 Share 给 Server)

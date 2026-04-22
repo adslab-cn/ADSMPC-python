@@ -28,13 +28,17 @@ def secure_div(x, y):
     :rtype: ArithmeticSecretSharing
 
     """
+    debugging = False
     if x.numel() > y.numel():
-        print("="*30)
+        if debugging:
+            print("="*30)
         inv_y = secure_inv(y)
-        temp = inv_y.restore()
-        print(temp.convert_to_real_field())
+        if debugging:
+            temp = inv_y.restore()
+            print(temp.convert_to_real_field())
         res = x * inv_y
-        print("="*30)
+        if debugging:
+            print("="*30)
         return res
     else:
         neg_exp2_k = get_neg_exp2_k(y)
