@@ -26,29 +26,32 @@ BERT_CONFIG = {
 BATCH = 1
 SEQ = 8
 NUM_DOCS = 10  # 知识库的文档库大小
-TOP_K = 5      # 我们想要召回的文档数量
+TOP_K = 1      # 我们想要召回的文档数量
 QUERY_LEN = 8
 SEM_DOC_LEN = 24  # 语义路召回的文档长度
 LEX_DOC_LEN = 24  # BM25路召回的文档长度
 # 最终送入模型的总长度 = Query + Doc1(语义) + Doc2(词汇) = 56
 TOTAL_SEQ = QUERY_LEN + SEM_DOC_LEN + LEX_DOC_LEN
+VOCAB_SIZE_BM25 = 100
+DEBUG = False
+
 
 def gen_params():
     print("=== [Init] 生成辅助参数 ===")
     if not os.path.exists('data'): os.makedirs('data')
-    AssMulTriples.gen_and_save(1000000, saved_name='2PCBeaver')
+    AssMulTriples.gen_and_save(50000000, saved_name='2PCBeaver')
     DivKey.gen_and_save(100000)
     GeLUKey.gen_and_save(100000)
     TanhKey.gen_and_save(100000)
     #MatmulTriples.gen_and_save(10000)
-    Wrap.gen_and_save(100000)
+    Wrap.gen_and_save(10000000)
     ReciprocalSqrtKey.gen_and_save(10000)
     SigmaDICFKey.gen_and_save(100000)
     B2AKey.gen_and_save(100000)
     print("=== [Init] 参数生成完成 ===\n")
 
 # ==========================================
-# 2. 核心 RAG 占位函数
+# 2. 核心 RAG
 # ==========================================
 def secure_distance_computation_placeholder(query_emb_share, doc_embs_share):
     """
@@ -67,74 +70,129 @@ def secure_distance_computation_placeholder(query_emb_share, doc_embs_share):
     
     return scores_share
 
-def secure_bm25_scoring_placeholder(client_keywords, server_okvs):
+def secure_bm25_scoring_placeholder(query_multihot_share, bm25_matrix_share):
     """
     [阶段 1 - 词汇路] 密态 BM25 打分
-    这里未来会跑 OPRF 和 OKVS 协议。
-    返回: 针对所有文档的 BM25 分数的 Secret Share，形状 [1, NUM_DOCS]
+    query_multihot_share: [VOCAB_SIZE_BM25, 1]
+    bm25_matrix_share: [VOCAB_SIZE_BM25, NUM_DOCS]
     """
-    # 假装算出了分数，用随机数代替
-    fake_scores = torch.randn(1, NUM_DOCS).to(DEVICE)
-    return ArithmeticSecretSharing(RingTensor.convert_to_ring(fake_scores))
+    # 1. 广播乘法：把查询的 1 和 0 乘到整个 BM25 矩阵上
+    # 这一步会消耗 AssMulTriples
+    element_wise_prod = query_multihot_share * bm25_matrix_share
+    
+    # 2. 沿着词汇维度 (dim=0) 求和，把命中的词的文档得分加起来
+    # 结果变成形状为 [NUM_DOCS] 的分数 Share
+    bm25_scores_share = element_wise_prod.sum(dim=0)
+        
+    return bm25_scores_share
 
 
-def secure_top_k_retrieval_placeholder(scores_share, doc_embs_share, k):
+# def secure_top_k_retrieval_placeholder(scores_share, doc_embs_share, k):
+#     """
+#     [阶段 2] 密态 Top-K 召回 (带全流程追踪和单乘法优化版)
+#     """
+#     party = PartyRuntime.party
+#     num_docs = doc_embs_share.shape[0]
+#     scores_share_1d = scores_share.view(-1)
+    
+#     scores_list = [scores_share_1d[i] for i in range(num_docs)]
+#     docs_list = [doc_embs_share[i] for i in range(num_docs)]
+
+#     for i in range(k):
+#         for j in range(num_docs - 1, i, -1):
+            
+#             # 1. 密态比较
+#             cond = scores_list[j] > scores_list[j-1]
+
+#             # 2. 密态交换 (使用优化的单乘法公式，避免 1 - cond 的未知异常)
+#             # diff = j的值 - (j-1)的值。
+#             # 如果 cond=1 (说明 j 大)，那么 swap_term 就是差值。
+#             score_diff = scores_list[j] - scores_list[j-1]
+#             score_swap_term = cond * score_diff
+            
+#             # (j-1) 加上差值变成大的，j 减去差值变成小的，完成交换。
+#             new_score_j_minus_1 = scores_list[j-1] + score_swap_term
+#             new_score_j = scores_list[j] - score_swap_term
+
+#             # 对文档特征做相同的操作
+#             doc_diff = docs_list[j] - docs_list[j-1]
+#             doc_swap_term = cond * doc_diff
+
+#             new_doc_j_minus_1 = docs_list[j-1] + doc_swap_term
+#             new_doc_j = docs_list[j] - doc_swap_term
+
+#             # 更新列表
+#             scores_list[j] = new_score_j
+#             scores_list[j-1] = new_score_j_minus_1
+#             docs_list[j] = new_doc_j
+#             docs_list[j-1] = new_doc_j_minus_1
+
+#             # ====================================================
+#             # 【上帝视角】：把当前这一步的排序结果还原出来看看！
+#             # ====================================================
+#             if party is not None and DEBUG:
+#                 current_scores_share = ArithmeticSecretSharing.cat([s.unsqueeze(0) for s in scores_list], dim=0)
+#                 if party.type == 'client':
+#                     party.send(current_scores_share)
+#                 elif party.type == 'server':
+#                     c_current_scores = party.receive()
+#                     plain_scores = ArithmeticSecretSharing.restore_from_shares(current_scores_share, c_current_scores).convert_to_real_field()
+#                     print(f"  [追踪 i={i}, j={j}] 比较了索引 {j} 和 {j-1} 后，当前分数: \n  {plain_scores}")
+
+#     top_k_docs_list = docs_list[:k]
+#     top_k_docs_expanded = [doc.unsqueeze(0) for doc in top_k_docs_list]
+#     top_k_docs_share = ArithmeticSecretSharing.cat(top_k_docs_expanded, dim=0)
+
+#     return top_k_docs_share
+
+
+def secure_top_k_retrieval_placeholder(scores_share, k, party=None):
     """
-    [阶段 2] 密态 Top-K 召回 (带全流程追踪和单乘法优化版)
+    [阶段 2] 密态 Top-K 召回 (指示器版本)
+    不再传入 doc_embs_share，而是内部生成单位矩阵作为身份证。
     """
-    party = PartyRuntime.party
-    num_docs = doc_embs_share.shape[0]
+    num_docs = scores_share.shape[-1]
     scores_share_1d = scores_share.view(-1)
     
     scores_list = [scores_share_1d[i] for i in range(num_docs)]
-    docs_list = [doc_embs_share[i] for i in range(num_docs)]
+    
+    #生成 10x10 的明文单位矩阵，并转成 NssMPC 的 RingTensor (不加密，只是作为初始载体)
+    # 比如 doc_indicators_list[0] 就是 [1, 0, 0, 0, 0, 0, 0, 0, 0, 0]
+    indicators_plain = torch.eye(num_docs).to(DEVICE)
+    doc_indicators_list = [RingTensor.convert_to_ring(indicators_plain[i]) for i in range(num_docs)]
+    # 把它们包装成 ArithmeticSecretSharing (假装是密文参与运算)
+    doc_indicators_list = [ArithmeticSecretSharing(ind) for ind in doc_indicators_list]
 
     for i in range(k):
         for j in range(num_docs - 1, i, -1):
             
-            # 1. 密态比较
             cond = scores_list[j] > scores_list[j-1]
 
-            # 2. 密态交换 (使用优化的单乘法公式，避免 1 - cond 的未知异常)
-            # diff = j的值 - (j-1)的值。
-            # 如果 cond=1 (说明 j 大)，那么 swap_term 就是差值。
             score_diff = scores_list[j] - scores_list[j-1]
             score_swap_term = cond * score_diff
             
-            # (j-1) 加上差值变成大的，j 减去差值变成小的，完成交换。
             new_score_j_minus_1 = scores_list[j-1] + score_swap_term
             new_score_j = scores_list[j] - score_swap_term
 
-            # 对文档特征做相同的操作
-            doc_diff = docs_list[j] - docs_list[j-1]
-            doc_swap_term = cond * doc_diff
+            # 【修改】：交换身份证
+            ind_diff = doc_indicators_list[j] - doc_indicators_list[j-1]
+            ind_swap_term = cond * ind_diff
 
-            new_doc_j_minus_1 = docs_list[j-1] + doc_swap_term
-            new_doc_j = docs_list[j] - doc_swap_term
+            new_ind_j_minus_1 = doc_indicators_list[j-1] + ind_swap_term
+            new_ind_j = doc_indicators_list[j] - ind_swap_term
 
-            # 更新列表
             scores_list[j] = new_score_j
             scores_list[j-1] = new_score_j_minus_1
-            docs_list[j] = new_doc_j
-            docs_list[j-1] = new_doc_j_minus_1
+            doc_indicators_list[j] = new_ind_j
+            doc_indicators_list[j-1] = new_ind_j_minus_1
 
-            # ====================================================
-            # 【上帝视角】：把当前这一步的排序结果还原出来看看！
-            # ====================================================
-            if party is not None:
-                current_scores_share = ArithmeticSecretSharing.cat([s.unsqueeze(0) for s in scores_list], dim=0)
-                if party.type == 'client':
-                    party.send(current_scores_share)
-                elif party.type == 'server':
-                    c_current_scores = party.receive()
-                    plain_scores = ArithmeticSecretSharing.restore_from_shares(current_scores_share, c_current_scores).convert_to_real_field()
-                    print(f"  [追踪 i={i}, j={j}] 比较了索引 {j} 和 {j-1} 后，当前分数: \n  {plain_scores}")
+    # 提取前 K 个身份证
+    top_k_indicators_list = doc_indicators_list[:k]
+    # 拼成形状 [K, NUM_DOCS]
+    top_k_indicators_expanded = [ind.unsqueeze(0) for ind in top_k_indicators_list]
+    top_k_indicators_share = ArithmeticSecretSharing.cat(top_k_indicators_expanded, dim=0)
 
-    top_k_docs_list = docs_list[:k]
-    top_k_docs_expanded = [doc.unsqueeze(0) for doc in top_k_docs_list]
-    top_k_docs_share = ArithmeticSecretSharing.cat(top_k_docs_expanded, dim=0)
-
-    return top_k_docs_share
+    return top_k_indicators_share
 
 # ==========================================
 # 3. Server 与 Client 线程逻辑
@@ -182,6 +240,23 @@ def run_server():
         server.send(s_db_remote)
         my_db_share = s_db_local[0] 
 
+        print("[Server] 构建并分享 BM25 倒排矩阵 (词汇路)...")
+        # 用绝对值生成正数，模拟真实的 BM25 TF-IDF 分数
+        bm25_matrix_plain = torch.abs(torch.randn(VOCAB_SIZE_BM25, NUM_DOCS)).to(DEVICE)
+        s_bm25_local, s_bm25_remote = share_data(bm25_matrix_plain)
+        server.send(s_bm25_remote)
+        my_bm25_matrix_share = s_bm25_local[0]
+
+
+        #准备服务端的文档 Token 数据库 [NUM_DOCS, 24, 30522]
+        print("[Server] 构建并分享文档 Token 数据库...")
+        # 为了演示，生成 10 篇随机的 Token ID 文档
+        db_tokens_ids = torch.randint(0, BERT_CONFIG['vocab_size'], (NUM_DOCS, SEM_DOC_LEN)).to(DEVICE)
+        db_tokens_onehot = F.one_hot(db_tokens_ids, BERT_CONFIG['vocab_size']).float()
+        s_db_tokens_local, s_db_tokens_remote = share_data(db_tokens_onehot)
+        server.send(s_db_tokens_remote)
+        my_db_tokens_share = s_db_tokens_local[0] # [10, 24, 30522]
+
         # ---------------------------------------------------------
         # 3. 接收 Client Query 并提取特征
         # ---------------------------------------------------------
@@ -195,7 +270,7 @@ def run_server():
         _, pool = model(sh_in[0], sh_pos[0], sh_type[0], mask)
         query_emb_share = pool # shape: [1, 128]
 
-        query_emb_share = server.receive()[0]
+        #query_emb_share = server.receive()[0]
         
         # ---------------------------------------------------------
         # 4. RAG 核心流程：双路召回 (Dual-Path Retrieval)
@@ -220,48 +295,80 @@ def run_server():
 
 
 
-        top_k_docs_sem_share = secure_top_k_retrieval_placeholder(scores_sem_share, my_db_share, k=TOP_K)
+        #top_k_docs_sem_share = secure_top_k_retrieval_placeholder(scores_sem_share, my_db_share, k=TOP_K)
+
 
         # 【第二路：词汇检索 BM25 Path】
-        server_okvs_mock = None # 随便给个 None 占位，防止报错
-        client_keywords = ["apple", "price"] # 模拟客户端输入的词
-        scores_lex_share = secure_bm25_scoring_placeholder(client_keywords, server_okvs_mock)
-        #top_k_docs_lex_share = secure_top_k_retrieval_placeholder(scores_lex_share, my_db_share, k=1)
+        print("[Server] RAG: 执行词汇路(BM25) 打分与排序...")
+        
+        # 1. 接收 Client 发来的多热编码 Query Share
+        my_query_multihot_share = server.receive()[0]
+        
+        # 2. 调用真正的 BM25 密态打分函数
+        scores_lex_share = secure_bm25_scoring_placeholder(my_query_multihot_share, my_bm25_matrix_share)
+        
+        # 3. 完美复用之前写好的密态冒泡排序算法！
+        #top_k_docs_lex_share = secure_top_k_retrieval_placeholder(scores_lex_share, my_db_share, k=TOP_K)
 
         # ---------------------------------------------------------
         # 5. 还原结果进行验证 (这里验证一下语义路的结果)
         # ---------------------------------------------------------
-        c_top_k_docs = server.receive()
-        final_docs = ArithmeticSecretSharing.restore_from_shares(top_k_docs_sem_share, c_top_k_docs)
-        print("\n=== [Server] RAG 语义路召回的文档明文 (前两维) ===")
-        print(final_docs.convert_to_real_field()[:, :5])
+        # c_top_k_docs = server.receive()
+        # final_docs = ArithmeticSecretSharing.restore_from_shares(top_k_docs_sem_share, c_top_k_docs)
+        # print("\n=== [Server] RAG 语义路召回的文档明文 (前两维) ===")
+        # print(final_docs.convert_to_real_field()[:, :5])
         
         print("[Server] 执行 Dummy Model 2 (Seq=56)...")
         server.dummy_model(model_for_dummy)
         
         print("[融合] 拼接 Semantic 和 BM25 召回的密态文档...")
         
-        # 1). 模拟将【语义路】召回的文档转为密文 Share
-        doc_sem_ids = torch.tensor([[666, 777, 888, 999, 102] + [0]*(SEM_DOC_LEN-5)]).to(DEVICE)
-        oh_doc_sem = F.one_hot(doc_sem_ids, BERT_CONFIG['vocab_size']).float()
-        s_doc_sem_local, s_doc_sem_remote = share_data(oh_doc_sem)
-        server.send(s_doc_sem_remote)
-        my_doc_sem_share = s_doc_sem_local[0]  # [1, 24, V]
+        # # 1). 模拟将【语义路】召回的文档转为密文 Share
+        # doc_sem_ids = torch.tensor([[666, 777, 888, 999, 102] + [0]*(SEM_DOC_LEN-5)]).to(DEVICE)
+        # oh_doc_sem = F.one_hot(doc_sem_ids, BERT_CONFIG['vocab_size']).float()
+        # s_doc_sem_local, s_doc_sem_remote = share_data(oh_doc_sem)
+        # server.send(s_doc_sem_remote)
+        # my_doc_sem_share = s_doc_sem_local[0]  # [1, 24, V]
 
-        # 2). 模拟将【词汇路(BM25)】召回的文档转为密文 Share
-        doc_lex_ids = torch.tensor([[111, 222, 333, 444, 102] + [0]*(LEX_DOC_LEN-5)]).to(DEVICE)
-        oh_doc_lex = F.one_hot(doc_lex_ids, BERT_CONFIG['vocab_size']).float()
-        s_doc_lex_local, s_doc_lex_remote = share_data(oh_doc_lex)
-        server.send(s_doc_lex_remote)
-        my_doc_lex_share = s_doc_lex_local[0]  # [1, 24, V]
+        # # 2). 模拟将【词汇路(BM25)】召回的文档转为密文 Share
+        # doc_lex_ids = torch.tensor([[111, 222, 333, 444, 102] + [0]*(LEX_DOC_LEN-5)]).to(DEVICE)
+        # oh_doc_lex = F.one_hot(doc_lex_ids, BERT_CONFIG['vocab_size']).float()
+        # s_doc_lex_local, s_doc_lex_remote = share_data(oh_doc_lex)
+        # server.send(s_doc_lex_remote)
+        # my_doc_lex_share = s_doc_lex_local[0]  # [1, 24, V]
 
-        # 3). 拿到 Client 之前发来的 Query Share (长度 8)
+        # # 3). 拿到 Client 之前发来的 Query Share (长度 8)
+        # my_query_share = sh_in[0]
+
+        # # 4). 密态无缝拼接 Query + SemDoc + LexDoc
+        # print("[Server] 密态拼接 Query 和 双路 Document...")
+        # # 把三者在序列维度(dim=1)拼接，总长 8 + 24 + 24 = 56
+        # my_joint_ids_share = ArithmeticSecretSharing.cat([my_query_share, my_doc_sem_share, my_doc_lex_share], dim=1)
+
+
+
+        # 调用排序，拿到的是指示器 [1, 10]
+        top_k_ind_sem_share = secure_top_k_retrieval_placeholder(scores_sem_share, k=TOP_K)
+        top_k_ind_lex_share = secure_top_k_retrieval_placeholder(scores_lex_share, k=TOP_K)
+        
+        print("[融合] 通过密态指示器，提取真实 Token 序列...")
+        # 魔法发生的地方：[1, 10] -> [1, 10, 1, 1] 广播乘以 [10, 24, 30522]
+        # 然后把维度 1 加起来，就完美提取出了 [1, 24, 30522] 的目标文档！
+        
+        # 1). 提取语义路真实文档 Token
+        expanded_ind_sem = top_k_ind_sem_share.unsqueeze(-1).unsqueeze(-1)
+        my_doc_sem_share = (expanded_ind_sem * my_db_tokens_share).sum(dim=1)
+        
+        # 2). 提取 BM25路真实文档 Token
+        expanded_ind_lex = top_k_ind_lex_share.unsqueeze(-1).unsqueeze(-1)
+        my_doc_lex_share = (expanded_ind_lex * my_db_tokens_share).sum(dim=1)
+
+        # 3). 拿到 Client 发来的 Query Share，直接拼接！
         my_query_share = sh_in[0]
-
-        # 4). 密态无缝拼接 Query + SemDoc + LexDoc
-        print("[Server] 密态拼接 Query 和 双路 Document...")
-        # 把三者在序列维度(dim=1)拼接，总长 8 + 24 + 24 = 56
         my_joint_ids_share = ArithmeticSecretSharing.cat([my_query_share, my_doc_sem_share, my_doc_lex_share], dim=1)
+
+
+
 
         # 5). 接收 Client 发来的辅助张量 (Pos, Typ, Mask)
         my_pos_share = server.receive()[0]
@@ -320,6 +427,16 @@ def run_client():
         c_db_remote = client.receive()
         my_db_share = c_db_remote[0]
 
+        # 【接收 BM25 知识库】
+        print("[Client] 接收 BM25 密态索引矩阵...")
+        c_bm25_remote = client.receive()
+        my_bm25_matrix_share = c_bm25_remote[0]
+
+        # 接收文档 Token 数据库
+        print("[Client] 接收文档 Token 数据库...")
+        c_db_tokens_remote = client.receive()
+        my_db_tokens_share = c_db_tokens_remote[0]
+
         # ---------------------------------------------------------
         # 3. 发送 Query 并提取特征
         # ---------------------------------------------------------
@@ -331,10 +448,10 @@ def run_client():
         
         _, pool = model(s_ids[0][0], s_pos[0][0], s_typ[0][0], RingTensor.convert_to_ring(mask))
         query_emb_share = pool
-        dummy_query_plain = torch.randn(1, 128).to(DEVICE)
-        s_query_local, s_query_remote = share_data(dummy_query_plain)
-        query_emb_share = s_query_local[0]
-        client.send(s_query_remote)
+        # dummy_query_plain = torch.randn(1, 128).to(DEVICE)
+        # s_query_local, s_query_remote = share_data(dummy_query_plain)
+        # query_emb_share = s_query_local[0]
+        # client.send(s_query_remote)
 
         # ---------------------------------------------------------
         # 4. RAG 核心流程 (参与距离计算 -> 参与召回)
@@ -346,18 +463,32 @@ def run_client():
         
         # client.send(scores_sem_share)
 
-        top_k_docs_sem_share = secure_top_k_retrieval_placeholder(scores_sem_share, my_db_share, k=TOP_K)
+        #top_k_docs_sem_share = secure_top_k_retrieval_placeholder(scores_sem_share, my_db_share, k=TOP_K)
+
 
         # 【第二路：词汇检索 BM25 Path】
-        server_okvs_mock = None 
-        client_keywords = ["apple", "price"]
-        scores_lex_share = secure_bm25_scoring_placeholder(client_keywords, server_okvs_mock)
-        #top_k_docs_lex_share = secure_top_k_retrieval_placeholder(scores_lex_share, my_db_share, k=1)
+        print("[Client] RAG: 执行词汇路(BM25) 打分与排序...")
+        
+        # 1. 模拟 Client 将搜索词（比如 "apple" 和 "price"）转成了词表索引 5 和 8
+        query_multihot_plain = torch.zeros(VOCAB_SIZE_BM25, 1).to(DEVICE)
+        query_multihot_plain[5, 0] = 1.0
+        query_multihot_plain[8, 0] = 1.0
+        
+        # 2. 把多热编码 Query 切片并发送给 Server
+        s_qhot_local, s_qhot_remote = share_data(query_multihot_plain)
+        my_query_multihot_share = s_qhot_local[0]
+        client.send(s_qhot_remote)
+        
+        # 3. 调用真正的 BM25 密态打分函数
+        scores_lex_share = secure_bm25_scoring_placeholder(my_query_multihot_share, my_bm25_matrix_share)
+        
+        # 4. 复用密态冒泡排序
+        #top_k_docs_lex_share = secure_top_k_retrieval_placeholder(scores_lex_share, my_db_share, k=TOP_K)
 
         # ---------------------------------------------------------
         # 5. 配合还原结果 (发送语义路的 Share 给 Server)
         # ---------------------------------------------------------
-        client.send(top_k_docs_sem_share)
+        #client.send(top_k_docs_sem_share)
         
         # ================== 【第二次假跑】 ==================
         print("[Client] 执行 Dummy Model 2 (Seq=56)...")
@@ -368,20 +499,44 @@ def run_client():
         client.dummy_model(dummy_ids_32, dummy_pos_32, dummy_typ_32, dummy_mask_32)
         # =========================================================        
 
-        # 1) 接收 Server 发来的【语义路】文档 Share
-        c_doc_sem_remote = client.receive()
-        my_doc_sem_share = c_doc_sem_remote[0] # [1, 24, V]
+        # # 1) 接收 Server 发来的【语义路】文档 Share
+        # c_doc_sem_remote = client.receive()
+        # my_doc_sem_share = c_doc_sem_remote[0] # [1, 24, V]
         
-        # 2) 接收 Server 发来的【词汇路(BM25)】文档 Share
-        c_doc_lex_remote = client.receive()
-        my_doc_lex_share = c_doc_lex_remote[0] # [1, 24, V]
+        # # 2) 接收 Server 发来的【词汇路(BM25)】文档 Share
+        # c_doc_lex_remote = client.receive()
+        # my_doc_lex_share = c_doc_lex_remote[0] # [1, 24, V]
 
-        # 3) 复用前面 Client 发 Query 时的 Share (长度 8)
-        my_query_share = s_ids[0][0]   
+        # # 3) 复用前面 Client 发 Query 时的 Share (长度 8)
+        # my_query_share = s_ids[0][0]   
 
-        # 4) 密态无缝拼接 Query + SemDoc + LexDoc
-        print("[Client] 密态拼接 Query 和 双路 Document...")
+        # # 4) 密态无缝拼接 Query + SemDoc + LexDoc
+        # print("[Client] 密态拼接 Query 和 双路 Document...")
+        # my_joint_ids_share = ArithmeticSecretSharing.cat([my_query_share, my_doc_sem_share, my_doc_lex_share], dim=1)
+
+
+        # 调用排序，拿到的是指示器 [1, 10]
+        top_k_ind_sem_share = secure_top_k_retrieval_placeholder(scores_sem_share, k=TOP_K)
+        top_k_ind_lex_share = secure_top_k_retrieval_placeholder(scores_lex_share, k=TOP_K)
+        
+        print("[融合] 通过密态指示器，提取真实 Token 序列...")
+        # 魔法发生的地方：[1, 10] -> [1, 10, 1, 1] 广播乘以 [10, 24, 30522]
+        # 然后把维度 1 加起来，就完美提取出了 [1, 24, 30522] 的目标文档！
+        
+        # 1). 提取语义路真实文档 Token
+        expanded_ind_sem = top_k_ind_sem_share.unsqueeze(-1).unsqueeze(-1)
+        my_doc_sem_share = (expanded_ind_sem * my_db_tokens_share).sum(dim=1)
+        
+        # 2). 提取 BM25路真实文档 Token
+        expanded_ind_lex = top_k_ind_lex_share.unsqueeze(-1).unsqueeze(-1)
+        my_doc_lex_share = (expanded_ind_lex * my_db_tokens_share).sum(dim=1)
+
+        # 3). 拿到 Client 发来的 Query Share，直接拼接！
+        my_query_share = s_ids[0][0]
         my_joint_ids_share = ArithmeticSecretSharing.cat([my_query_share, my_doc_sem_share, my_doc_lex_share], dim=1)
+
+
+
 
         # 5) 构造 56 长度的 Pos, Typ, Mask
         joint_pos = torch.arange(TOTAL_SEQ).unsqueeze(0).to(DEVICE)
