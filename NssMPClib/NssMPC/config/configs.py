@@ -21,6 +21,7 @@ LAMBDA = config['LAMBDA']
 GE_TYPE = config['GE_TYPE']
 PRG_TYPE = config['PRG_TYPE']
 DEVICE = os.environ.get('DEVICE') if os.environ.get('DEVICE') else config['DEVICE']
+DEVICE = "cpu"
 DEBUG_LEVEL = config['DEBUG_LEVEL']
 DTYPE = config['DTYPE']
 SOCKET_TYPE = config['SOCKET_TYPE']  # 0: Normal   1: Multi-threaded
