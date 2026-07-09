@@ -1,4 +1,10 @@
 {
+    "python.defaultInterpreterPath": "/home/adslab/anaconda3/envs/nssmpc/bin/python",
     "python-envs.defaultEnvManager": "ms-python.python:conda",
-    "python-envs.defaultPackageManager": "ms-python.python:conda"
+    "python-envs.defaultPackageManager": "ms-python.python:conda",
+    "python.analysis.extraPaths": [
+        "${workspaceFolder}/NssMPClib"
+    ],
+    "python.testing.pytestEnabled": false,
+    "python.testing.unittestEnabled": false
 }

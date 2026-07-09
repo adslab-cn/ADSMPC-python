@@ -14,5 +14,8 @@ setup(
     license="MIT",
     packages=find_packages(where='.NssMPC'),
     include_package_data=True,
-    install_requires=[f'torchcsprng @ file://localhost/{path}/csprng'],
+    install_requires=[
+        "cryptography>=48.0.1",
+        f'torchcsprng @ file://localhost/{path}/csprng',
+    ],
 )

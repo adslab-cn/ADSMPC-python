@@ -2,14 +2,298 @@
     "version": "0.2.0",
     "configurations": [
         {
-            "name": "RAG",
+            "name": "RAG demo",
             "type": "python",
             "request": "launch",
             "program": "${workspaceFolder}/NssMPClib/test/rag.py",
             "console": "integratedTerminal",
-            "justMyCode": true,
+            "justMyCode": false,
             "env": {
-                "PYTHONPATH": "${workspaceFolder}/NssMPClib/"
+                "PYTHONPATH": "${workspaceFolder}/NssMPClib"
+            }
+        },
+        {
+            "name": "Pisces end-to-end functional demo",
+            "type": "python",
+            "request": "launch",
+            "program": "${workspaceFolder}/NssMPClib/test/pisces_end_to_end.py",
+            "console": "integratedTerminal",
+            "justMyCode": false,
+            "env": {
+                "PYTHONPATH": "${workspaceFolder}/NssMPClib",
+                "PYTHONUNBUFFERED": "1"
+            }
+        },
+        {
+            "name": "Pisces real dataset eval - Hotpot smoke",
+            "type": "python",
+            "request": "launch",
+            "program": "${workspaceFolder}/NssMPClib/test/pisces_real_dataset_eval.py",
+            "console": "integratedTerminal",
+            "justMyCode": false,
+            "args": [
+                "--limit-queries",
+                "3",
+                "--corpus-limit",
+                "200",
+                "--protocol-docs",
+                "200",
+                "--top-k",
+                "5",
+                "--verbose-queries",
+                "3",
+                "--device",
+                "cuda",
+                "--setup-mode",
+                "offline",
+                "--setup-cache-dir",
+                "${workspaceFolder}/data/pisces_setup_cache",
+                "--report-jsonl",
+                "${workspaceFolder}/data/pisces_reports/hotpot_smoke.jsonl",
+                "--resume-report"
+            ],
+            "env": {
+                "PYTHONPATH": "${workspaceFolder}/NssMPClib",
+                "PYTHONUNBUFFERED": "1",
+                "DEVICE": "cuda",
+                "HTTP_PROXY": "http://10.122.245.238:10808",
+                "HTTPS_PROXY": "http://10.122.245.238:10808",
+                "ALL_PROXY": "socks5://10.122.245.238:10808"
+            }
+        },
+        {
+            "name": "Pisces real dataset eval - SQuAD dev smoke",
+            "type": "python",
+            "request": "launch",
+            "program": "${workspaceFolder}/NssMPClib/test/pisces_real_dataset_eval.py",
+            "console": "integratedTerminal",
+            "justMyCode": false,
+            "args": [
+                "--dataset",
+                "squad_dev_v2",
+                "--limit-queries",
+                "3",
+                "--corpus-limit",
+                "80",
+                "--protocol-docs",
+                "80",
+                "--top-k",
+                "5",
+                "--verbose-queries",
+                "1",
+                "--device",
+                "cuda",
+                "--setup-mode",
+                "offline",
+                "--setup-cache-dir",
+                "${workspaceFolder}/data/pisces_setup_cache",
+                "--report-jsonl",
+                "${workspaceFolder}/data/pisces_reports/squad_dev_smoke.jsonl",
+                "--resume-report"
+            ],
+            "env": {
+                "PYTHONPATH": "${workspaceFolder}/NssMPClib",
+                "PYTHONUNBUFFERED": "1",
+                "DEVICE": "cuda",
+                "HTTP_PROXY": "http://10.122.245.238:10808",
+                "HTTPS_PROXY": "http://10.122.245.238:10808",
+                "ALL_PROXY": "socks5://10.122.245.238:10808"
+            }
+        },
+        {
+            "name": "Pisces Protocol 4 audit",
+            "type": "python",
+            "request": "launch",
+            "program": "${workspaceFolder}/NssMPClib/test/test_pisces_protocol4.py",
+            "console": "integratedTerminal",
+            "justMyCode": false,
+            "env": {
+                "PYTHONPATH": "${workspaceFolder}/NssMPClib"
+            }
+        },
+        {
+            "name": "Pisces Protocol 3 audit",
+            "type": "python",
+            "request": "launch",
+            "program": "${workspaceFolder}/NssMPClib/test/test_pisces_protocol3.py",
+            "console": "integratedTerminal",
+            "justMyCode": false,
+            "env": {
+                "PYTHONPATH": "${workspaceFolder}/NssMPClib",
+                "PYTHONUNBUFFERED": "1"
+            }
+        },
+        {
+            "name": "Pisces Protocol 2 audit",
+            "type": "python",
+            "request": "launch",
+            "program": "${workspaceFolder}/NssMPClib/test/test_pisces_protocol2.py",
+            "console": "integratedTerminal",
+            "justMyCode": false,
+            "env": {
+                "PYTHONPATH": "${workspaceFolder}/NssMPClib",
+                "PYTHONUNBUFFERED": "1"
+            }
+        },
+        {
+            "name": "Pisces Protocol 1 audit",
+            "type": "python",
+            "request": "launch",
+            "program": "${workspaceFolder}/NssMPClib/test/test_pisces_protocol1.py",
+            "console": "integratedTerminal",
+            "justMyCode": false,
+            "env": {
+                "PYTHONPATH": "${workspaceFolder}/NssMPClib",
+                "PYTHONUNBUFFERED": "1"
+            }
+        },
+        {
+            "name": "Pisces PIR audit",
+            "type": "python",
+            "request": "launch",
+            "program": "${workspaceFolder}/NssMPClib/test/test_pisces_pir.py",
+            "console": "integratedTerminal",
+            "justMyCode": false,
+            "env": {
+                "PYTHONPATH": "${workspaceFolder}/NssMPClib",
+                "PYTHONUNBUFFERED": "1"
+            }
+        },
+        {
+            "name": "Pisces Protocol 2/3/4 ciphertext audit",
+            "type": "python",
+            "request": "launch",
+            "program": "${workspaceFolder}/NssMPClib/test/test_pisces_protocol234_audit.py",
+            "console": "integratedTerminal",
+            "justMyCode": false,
+            "env": {
+                "PYTHONPATH": "${workspaceFolder}/NssMPClib",
+                "PYTHONUNBUFFERED": "1"
+            }
+        },
+        {
+            "name": "Pisces secure sorting plain",
+            "type": "python",
+            "request": "launch",
+            "program": "${workspaceFolder}/NssMPClib/test/test_pisces_secure_sorting.py",
+            "console": "integratedTerminal",
+            "justMyCode": false,
+            "env": {
+                "PYTHONPATH": "${workspaceFolder}/NssMPClib",
+                "PYTHONUNBUFFERED": "1"
+            }
+        },
+        {
+            "name": "Pisces secure sorting ASS runtime",
+            "type": "python",
+            "request": "launch",
+            "program": "${workspaceFolder}/NssMPClib/test/test_pisces_secure_sorting_ass.py",
+            "console": "integratedTerminal",
+            "justMyCode": false,
+            "env": {
+                "PYTHONPATH": "${workspaceFolder}/NssMPClib",
+                "PYTHONUNBUFFERED": "1",
+                "DEVICE": "cpu"
+            }
+        },
+        {
+            "name": "Pisces paper benchmark quick",
+            "type": "python",
+            "request": "launch",
+            "program": "${workspaceFolder}/NssMPClib/test/test_pisces_paper_benchmark.py",
+            "console": "integratedTerminal",
+            "justMyCode": false,
+            "env": {
+                "PYTHONPATH": "${workspaceFolder}/NssMPClib",
+                "PYTHONUNBUFFERED": "1",
+                "PISCES_BENCH_PROFILE": "quick",
+                "PISCES_BENCH_P1": "1"
+            }
+        },
+        {
+            "name": "Pisces Protocol 4 comm",
+            "type": "python",
+            "request": "launch",
+            "program": "${workspaceFolder}/NssMPClib/test/test_pisces_protocol4_comm.py",
+            "console": "integratedTerminal",
+            "justMyCode": false,
+            "env": {
+                "PYTHONPATH": "${workspaceFolder}/NssMPClib"
+            }
+        },
+        {
+            "name": "Pisces Protocol 4 scale",
+            "type": "python",
+            "request": "launch",
+            "program": "${workspaceFolder}/NssMPClib/test/test_pisces_protocol4_scale.py",
+            "console": "integratedTerminal",
+            "justMyCode": false,
+            "env": {
+                "PYTHONPATH": "${workspaceFolder}/NssMPClib",
+                "PYTHONUNBUFFERED": "1",
+                "PISCES_SCALE_DOCS": "2000",
+                "PISCES_SCALE_VOCAB": "4000",
+                "PISCES_SCALE_TERMS_PER_DOC": "10",
+                "PISCES_SCALE_QUERY_TERMS": "8"
+            }
+        },
+        {
+            "name": "Pisces Protocol 4 scale - SQuAD q=1",
+            "type": "python",
+            "request": "launch",
+            "program": "${workspaceFolder}/NssMPClib/test/test_pisces_protocol4_scale.py",
+            "console": "integratedTerminal",
+            "justMyCode": false,
+            "env": {
+                "PYTHONPATH": "${workspaceFolder}/NssMPClib",
+                "PYTHONUNBUFFERED": "1",
+                "PISCES_SCALE_DOCS": "19029",
+                "PISCES_SCALE_VOCAB": "1000",
+                "PISCES_SCALE_TERMS_PER_DOC": "25",
+                "PISCES_SCALE_QUERY_TERMS": "1"
+            }
+        },
+        {
+            "name": "Pisces Protocol 4 scale - SQuAD q=8",
+            "type": "python",
+            "request": "launch",
+            "program": "${workspaceFolder}/NssMPClib/test/test_pisces_protocol4_scale.py",
+            "console": "integratedTerminal",
+            "justMyCode": false,
+            "env": {
+                "PYTHONPATH": "${workspaceFolder}/NssMPClib",
+                "PYTHONUNBUFFERED": "1",
+                "PISCES_SCALE_DOCS": "19029",
+                "PISCES_SCALE_VOCAB": "1000",
+                "PISCES_SCALE_TERMS_PER_DOC": "25",
+                "PISCES_SCALE_QUERY_TERMS": "8"
+            }
+        },
+        {
+            "name": "Pisces Protocol 4 scale - Hotpot q=1",
+            "type": "python",
+            "request": "launch",
+            "program": "${workspaceFolder}/NssMPClib/test/test_pisces_protocol4_scale.py",
+            "console": "integratedTerminal",
+            "justMyCode": false,
+            "env": {
+                "PYTHONPATH": "${workspaceFolder}/NssMPClib",
+                "PYTHONUNBUFFERED": "1",
+                "PISCES_SCALE_DOCS": "269602",
+                "PISCES_SCALE_VOCAB": "1000",
+                "PISCES_SCALE_TERMS_PER_DOC": "6",
+                "PISCES_SCALE_QUERY_TERMS": "1"
+            }
+        },
+        {
+            "name": "Current Python file",
+            "type": "python",
+            "request": "launch",
+            "program": "${file}",
+            "console": "integratedTerminal",
+            "justMyCode": false,
+            "env": {
+                "PYTHONPATH": "${workspaceFolder}/NssMPClib"
             }
         },
         {
@@ -20,7 +304,7 @@
             "console": "integratedTerminal",
             "justMyCode": true,
             "env": {
-                "PYTHONPATH": "${workspaceFolder}/NssMPClib/"
+                "PYTHONPATH": "${workspaceFolder}/NssMPClib"
             }
         }
     ]

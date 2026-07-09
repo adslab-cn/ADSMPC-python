@@ -170,6 +170,8 @@ def count_bytes(a):
         return 8
     elif isinstance(a, str):
         return len(a)
+    elif isinstance(a, (bytes, bytearray)):
+        return len(a)
     else:
         if hasattr(a, '__dict__'):
             return count_bytes(a.__dict__)

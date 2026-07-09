@@ -14,6 +14,18 @@ from NssMPC.config.runtime import PartyRuntime
 from NssMPC.application.neural_network.utils.converter import share_model, load_model, share_data
 from NssMPC.crypto.aux_parameter import AssMulTriples, DivKey, GeLUKey, Wrap, SigmaDICFKey, ReciprocalSqrtKey, TanhKey,MatmulTriples,B2AKey
 from NssMPC.application.neural_network.layers.mha import SecBertModel
+from NssMPC.application.rag.pisces import PiscesConfig
+from NssMPC.application.rag.pisces.ops import (
+    default_average_length,
+    secure_bm25_scores_from_shares,
+)
+from NssMPC.application.rag.pisces.pir import SudaPIRToSharePlaintextProtocolBackend, suda_pir_to_share
+from NssMPC.application.rag.pisces.protocol1 import Protocol1Client, Protocol1Server, protocol1_finish_from_candidate_mask
+from NssMPC.application.rag.pisces.protocol3 import AdditivePaillier, Protocol3Client, Protocol3Server
+from NssMPC.application.rag.pisces.protocol4 import Protocol4Client, Protocol4Server
+from NssMPC.application.rag.pisces.secure_sorting import secure_top_k_indicators
+from NssMPC.crypto.primitives.okvs import BinaryOKVS
+from NssMPC.crypto.primitives.oprf import DHOPRFClient, DHOPRFParams, DHOPRFServer
 
 # ==========================================
 # 1. 全局配置
@@ -34,6 +46,81 @@ LEX_DOC_LEN = 24  # BM25路召回的文档长度
 TOTAL_SEQ = QUERY_LEN + SEM_DOC_LEN + LEX_DOC_LEN
 VOCAB_SIZE_BM25 = 100
 DEBUG = False
+QUERY_BM25_TOKENS = torch.tensor([5, 8])
+P3_SIMHASH_BITS = 32
+P3_THRESHOLD = 2
+P3_PROJECTION_COUNT = 8
+RAG_CONFIG = PiscesConfig(top_k=TOP_K, simhash_bits=P3_SIMHASH_BITS, hamming_threshold=P3_THRESHOLD)
+
+
+def print_pisces_contract(role):
+    print(f"[{role}][Pisces-status] rag.py is the two-party NssMPClib integration demo.")
+    print(f"[{role}][Pisces-status] Protocol 3/4 use the current cryptographic implementations.")
+    print(f"[{role}][Pisces-status] Protocol 2 BM25 scoring and top-k run on ASS shares.")
+    print(
+        f"[{role}][Pisces-status] Payload PIR follows the Pisces dataflow: client restores top-k indices, "
+        "server keeps the plaintext payload database, and Suda PIR-to-share returns document shares."
+    )
+    print(
+        f"[{role}][Pisces-status] rag.py keeps retrieved document shares as ASS shares for secure BERT; "
+        "the optional share-to-HE handoff is intentionally skipped."
+    )
+
+
+def print_topk_audit(role, path, audit):
+    print(
+        f"[{role}][{path}-TopK-audit] algorithm={audit.algorithm}, backend={audit.backend}, "
+        f"network={audit.network}, comparisons={audit.comparisons}, "
+        f"paper_backend_available={audit.paper_backend_available}"
+    )
+    if not audit.paper_backend_available:
+        print(f"[{role}][{path}-TopK-audit] fallback={audit.backend_gap}")
+
+
+def print_pir_audit(role, path, pir_or_audit):
+    audit = pir_or_audit.audit if hasattr(pir_or_audit, "audit") else pir_or_audit
+    if isinstance(audit, dict):
+        print(
+            f"[{role}][{path}-PIR-audit] implementation={audit['implementation']}, "
+            f"paper_backend={audit['paper_backend']}, paper_backend_available={audit['paper_backend_available']}, "
+            f"output_shape={audit['output_shape']}"
+        )
+        print(f"[{role}][{path}-PIR-audit] backend_gap={audit['backend_gap']}")
+        print(
+            f"[{role}][{path}-PIR-to-MPC] Suda output shares are wrapped as ArithmeticSecretSharing shares "
+            "for the following secure BERT inference."
+        )
+        return
+    print(
+        f"[{role}][{path}-PIR-audit] implementation={audit.implementation}, "
+        f"paper_backend={audit.paper_backend}, paper_backend_available={audit.paper_backend_available}, "
+        f"output_shape={audit.output_shape}"
+    )
+    print(f"[{role}][{path}-PIR-audit] backend_gap={audit.backend_gap}")
+    print(
+        f"[{role}][{path}-PIR-to-MPC] Suda output shares are wrapped as ArithmeticSecretSharing shares "
+        "for the following secure BERT inference."
+    )
+
+
+def ass_from_plain_share(share_tensor):
+    return ArithmeticSecretSharing(RingTensor.convert_to_ring(share_tensor.to(DEVICE)))
+
+
+def audit_message(audit):
+    return {
+        "implementation": audit.implementation,
+        "paper_backend": audit.paper_backend,
+        "paper_backend_available": audit.paper_backend_available,
+        "backend_gap": audit.backend_gap,
+        "output_shape": audit.output_shape,
+    }
+
+
+def demo_semantic_query_embedding():
+    generator = torch.Generator(device=DEVICE)
+    generator.manual_seed(20260624)
+    return torch.randn(1, BERT_CONFIG["hidden_size"], generator=generator, device=DEVICE)
 
 
 def gen_params():
@@ -51,151 +138,7 @@ def gen_params():
     print("=== [Init] 参数生成完成 ===\n")
 
 # ==========================================
-# 2. 核心 RAG
-# ==========================================
-def secure_distance_computation_placeholder(query_emb_share, doc_embs_share):
-    """
-    [阶段 1] 密态距离计算
-    query_emb_share: [1, 128]
-    doc_embs_share: [NUM_DOCS, 128] (即 [10, 128])
-    """
-    # 使用逐元素相乘 (Element-wise Multiplication) 配合 PyTorch 广播机制
-    # [1, 128] * [10, 128] -> [10, 128]
-    # 这步会消耗普通的 AssMulTriples，不会触发 MatmulTriples 的形状报错
-    element_wise_prod = query_emb_share * doc_embs_share
-    
-    # 沿着特征维度(dim=-1)求和，等价于计算内积
-    # sum 会得到 [10] 维度的密态张量，这就是 10 篇文档的分数
-    scores_share = element_wise_prod.sum(dim=-1)
-    
-    return scores_share
-
-def secure_bm25_scoring_placeholder(query_multihot_share, bm25_matrix_share):
-    """
-    [阶段 1 - 词汇路] 密态 BM25 打分
-    query_multihot_share: [VOCAB_SIZE_BM25, 1]
-    bm25_matrix_share: [VOCAB_SIZE_BM25, NUM_DOCS]
-    """
-    # 1. 广播乘法：把查询的 1 和 0 乘到整个 BM25 矩阵上
-    # 这一步会消耗 AssMulTriples
-    element_wise_prod = query_multihot_share * bm25_matrix_share
-    
-    # 2. 沿着词汇维度 (dim=0) 求和，把命中的词的文档得分加起来
-    # 结果变成形状为 [NUM_DOCS] 的分数 Share
-    bm25_scores_share = element_wise_prod.sum(dim=0)
-        
-    return bm25_scores_share
-
-
-# def secure_top_k_retrieval_placeholder(scores_share, doc_embs_share, k):
-#     """
-#     [阶段 2] 密态 Top-K 召回 (带全流程追踪和单乘法优化版)
-#     """
-#     party = PartyRuntime.party
-#     num_docs = doc_embs_share.shape[0]
-#     scores_share_1d = scores_share.view(-1)
-    
-#     scores_list = [scores_share_1d[i] for i in range(num_docs)]
-#     docs_list = [doc_embs_share[i] for i in range(num_docs)]
-
-#     for i in range(k):
-#         for j in range(num_docs - 1, i, -1):
-            
-#             # 1. 密态比较
-#             cond = scores_list[j] > scores_list[j-1]
-
-#             # 2. 密态交换 (使用优化的单乘法公式，避免 1 - cond 的未知异常)
-#             # diff = j的值 - (j-1)的值。
-#             # 如果 cond=1 (说明 j 大)，那么 swap_term 就是差值。
-#             score_diff = scores_list[j] - scores_list[j-1]
-#             score_swap_term = cond * score_diff
-            
-#             # (j-1) 加上差值变成大的，j 减去差值变成小的，完成交换。
-#             new_score_j_minus_1 = scores_list[j-1] + score_swap_term
-#             new_score_j = scores_list[j] - score_swap_term
-
-#             # 对文档特征做相同的操作
-#             doc_diff = docs_list[j] - docs_list[j-1]
-#             doc_swap_term = cond * doc_diff
-
-#             new_doc_j_minus_1 = docs_list[j-1] + doc_swap_term
-#             new_doc_j = docs_list[j] - doc_swap_term
-
-#             # 更新列表
-#             scores_list[j] = new_score_j
-#             scores_list[j-1] = new_score_j_minus_1
-#             docs_list[j] = new_doc_j
-#             docs_list[j-1] = new_doc_j_minus_1
-
-#             # ====================================================
-#             # 【上帝视角】：把当前这一步的排序结果还原出来看看！
-#             # ====================================================
-#             if party is not None and DEBUG:
-#                 current_scores_share = ArithmeticSecretSharing.cat([s.unsqueeze(0) for s in scores_list], dim=0)
-#                 if party.type == 'client':
-#                     party.send(current_scores_share)
-#                 elif party.type == 'server':
-#                     c_current_scores = party.receive()
-#                     plain_scores = ArithmeticSecretSharing.restore_from_shares(current_scores_share, c_current_scores).convert_to_real_field()
-#                     print(f"  [追踪 i={i}, j={j}] 比较了索引 {j} 和 {j-1} 后，当前分数: \n  {plain_scores}")
-
-#     top_k_docs_list = docs_list[:k]
-#     top_k_docs_expanded = [doc.unsqueeze(0) for doc in top_k_docs_list]
-#     top_k_docs_share = ArithmeticSecretSharing.cat(top_k_docs_expanded, dim=0)
-
-#     return top_k_docs_share
-
-
-def secure_top_k_retrieval_placeholder(scores_share, k, party=None):
-    """
-    [阶段 2] 密态 Top-K 召回 (指示器版本)
-    不再传入 doc_embs_share，而是内部生成单位矩阵作为身份证。
-    """
-    num_docs = scores_share.shape[-1]
-    scores_share_1d = scores_share.view(-1)
-    
-    scores_list = [scores_share_1d[i] for i in range(num_docs)]
-    
-    #生成 10x10 的明文单位矩阵，并转成 NssMPC 的 RingTensor (不加密，只是作为初始载体)
-    # 比如 doc_indicators_list[0] 就是 [1, 0, 0, 0, 0, 0, 0, 0, 0, 0]
-    indicators_plain = torch.eye(num_docs).to(DEVICE)
-    doc_indicators_list = [RingTensor.convert_to_ring(indicators_plain[i]) for i in range(num_docs)]
-    # 把它们包装成 ArithmeticSecretSharing (假装是密文参与运算)
-    doc_indicators_list = [ArithmeticSecretSharing(ind) for ind in doc_indicators_list]
-
-    for i in range(k):
-        for j in range(num_docs - 1, i, -1):
-            
-            cond = scores_list[j] > scores_list[j-1]
-
-            score_diff = scores_list[j] - scores_list[j-1]
-            score_swap_term = cond * score_diff
-            
-            new_score_j_minus_1 = scores_list[j-1] + score_swap_term
-            new_score_j = scores_list[j] - score_swap_term
-
-            # 【修改】：交换身份证
-            ind_diff = doc_indicators_list[j] - doc_indicators_list[j-1]
-            ind_swap_term = cond * ind_diff
-
-            new_ind_j_minus_1 = doc_indicators_list[j-1] + ind_swap_term
-            new_ind_j = doc_indicators_list[j] - ind_swap_term
-
-            scores_list[j] = new_score_j
-            scores_list[j-1] = new_score_j_minus_1
-            doc_indicators_list[j] = new_ind_j
-            doc_indicators_list[j-1] = new_ind_j_minus_1
-
-    # 提取前 K 个身份证
-    top_k_indicators_list = doc_indicators_list[:k]
-    # 拼成形状 [K, NUM_DOCS]
-    top_k_indicators_expanded = [ind.unsqueeze(0) for ind in top_k_indicators_list]
-    top_k_indicators_share = ArithmeticSecretSharing.cat(top_k_indicators_expanded, dim=0)
-
-    return top_k_indicators_share
-
-# ==========================================
-# 3. Server 与 Client 线程逻辑
+# 2. Server 与 Client 线程逻辑
 # ==========================================
 server = NeuralNetworkCS(type='server')
 client = NeuralNetworkCS(type='client')
@@ -211,6 +154,7 @@ for p in [server, client]:
 def run_server():
     server.online()
     with PartyRuntime(server):
+        print_pisces_contract("Server")
         # ---------------------------------------------------------
         # 1. 准备模型 (Encoder)
         # ---------------------------------------------------------
@@ -234,28 +178,45 @@ def run_server():
         # 2. 准备服务端知识库 (Documents Database)
         # ---------------------------------------------------------
         print("[Server] 构建并分享密态知识库...")
-        db_embeddings = torch.randn(NUM_DOCS, BERT_CONFIG['hidden_size']).to(DEVICE)
+        db_generator = torch.Generator(device=DEVICE)
+        db_generator.manual_seed(20260625)
+        db_embeddings = torch.randn(
+            NUM_DOCS,
+            BERT_CONFIG['hidden_size'],
+            generator=db_generator,
+            device=DEVICE,
+        )
+        db_embeddings[0] = demo_semantic_query_embedding()[0]
         
         s_db_local, s_db_remote = share_data(db_embeddings)
         server.send(s_db_remote)
         my_db_share = s_db_local[0] 
 
-        print("[Server] 构建并分享 BM25 倒排矩阵 (词汇路)...")
-        # 用绝对值生成正数，模拟真实的 BM25 TF-IDF 分数
-        bm25_matrix_plain = torch.abs(torch.randn(VOCAB_SIZE_BM25, NUM_DOCS)).to(DEVICE)
-        s_bm25_local, s_bm25_remote = share_data(bm25_matrix_plain)
-        server.send(s_bm25_remote)
-        my_bm25_matrix_share = s_bm25_local[0]
+        print("[Server] 构建 Protocol 4 文档词频矩阵 (词汇路)...")
+        document_tf_plain = torch.randint(
+            0,
+            4,
+            (VOCAB_SIZE_BM25, NUM_DOCS),
+            dtype=torch.float32,
+            device=DEVICE,
+        )
+        document_lengths_plain = document_tf_plain.sum(dim=0).clamp_min(1.0)
+        print(f"[Server][P2-debug] document lengths for BM25={document_lengths_plain.tolist()}")
+        print(f"[Server][P2-debug] average document length={default_average_length(document_lengths_plain):.6f}")
+        for token in QUERY_BM25_TOKENS.tolist():
+            print(f"[Server][P4-debug] token={token} plaintext TF across docs: {document_tf_plain[token].tolist()}")
 
 
         #准备服务端的文档 Token 数据库 [NUM_DOCS, 24, 30522]
-        print("[Server] 构建并分享文档 Token 数据库...")
+        print("[Server] 构建服务端明文文档 Token 数据库，用于 Pisces PIR-to-share...")
         # 为了演示，生成 10 篇随机的 Token ID 文档
-        db_tokens_ids = torch.randint(0, BERT_CONFIG['vocab_size'], (NUM_DOCS, SEM_DOC_LEN)).to(DEVICE)
+        db_tokens_ids = torch.randint(
+            0,
+            BERT_CONFIG['vocab_size'],
+            (NUM_DOCS, SEM_DOC_LEN),
+            device=DEVICE,
+        )
         db_tokens_onehot = F.one_hot(db_tokens_ids, BERT_CONFIG['vocab_size']).float()
-        s_db_tokens_local, s_db_tokens_remote = share_data(db_tokens_onehot)
-        server.send(s_db_tokens_remote)
-        my_db_tokens_share = s_db_tokens_local[0] # [10, 24, 30522]
 
         # ---------------------------------------------------------
         # 3. 接收 Client Query 并提取特征
@@ -268,7 +229,10 @@ def run_server():
 
         print("[Server] 提取 Query 密态 Embedding...")
         _, pool = model(sh_in[0], sh_pos[0], sh_type[0], mask)
-        query_emb_share = pool # shape: [1, 128]
+        bert_query_emb_share = pool # shape: [1, 128]
+        semantic_query_remote = server.receive()
+        query_emb_share = semantic_query_remote[0]
+        print("[Server][P3-debug] received Client semantic query embedding share for Protocol 3/semantic fine scoring.")
 
         #query_emb_share = server.receive()[0]
         
@@ -277,9 +241,36 @@ def run_server():
         # ---------------------------------------------------------
         
         print("[Server] RAG: 开始双路密态打分与召回...")
-        
-        # 【第一路：语义检索 Semantic Path】
-        scores_sem_share = secure_distance_computation_placeholder(query_emb_share, my_db_share)
+
+        # 【第一路：语义检索 coarse filter via Pisces Protocol 3】
+        print("[Server] RAG: 执行语义路 Protocol 3 (SimHash projections + OKVS + Paillier/Shamir filter)...")
+        p1_server = Protocol1Server(
+            config=RAG_CONFIG,
+            protocol3=Protocol3Server(
+            okvs=BinaryOKVS(expansion=3.0, seed=b"rag-protocol3-okvs"),
+            he=AdditivePaillier(key_size=64),
+            threshold=P3_THRESHOLD,
+            projection_count=P3_PROJECTION_COUNT,
+            seed=b"rag-protocol3",
+            simhash_bits=P3_SIMHASH_BITS,
+            ),
+        )
+        p3_setup = p1_server.build_filter_setup(db_embeddings.cpu(), chunks=list(range(NUM_DOCS)))
+        print(
+            "[Server][P3-debug] setup: "
+            f"simhash_bits={p3_setup.simhash_bits}, masks={len(p3_setup.masks)}, "
+            f"projection_weight={p3_setup.projection_weight}, bucket_capacity={p3_setup.bucket_capacity}, "
+            f"OKVS slots={p3_setup.table.size}, value_size={p3_setup.table.value_size}"
+        )
+        server.send(p3_setup)
+        p3_message = server.receive()
+        p1_candidates = p1_server.recover_candidates(p3_message, num_docs=NUM_DOCS)
+        p3_candidate_indices = list(p1_candidates.candidate_indices)
+        if not p1_candidates.candidates:
+            print("[Server][P3-debug] candidate set is empty; demo falls back to all documents for semantic fine scoring.")
+        candidate_mask_plain = p1_candidates.candidate_mask.to(DEVICE)
+        server.send(candidate_mask_plain.cpu())
+        print(f"[Server][P3-debug] candidate_indices={p3_candidate_indices}")
 
         
         # # ====== 插入测试代码 (Start) ======
@@ -295,20 +286,81 @@ def run_server():
 
 
 
-        #top_k_docs_sem_share = secure_top_k_retrieval_placeholder(scores_sem_share, my_db_share, k=TOP_K)
+        # 【第二路：词汇检索 BM25 Path via Pisces Protocol 4】
+        print("[Server] RAG: 执行词汇路 Protocol 4 (OPRF + OKVS + AES labels)...")
+        p4_params = DHOPRFParams()
+        p4_server = Protocol4Server(oprf_server=DHOPRFServer(params=p4_params))
+        p4_setup = p4_server.build_setup(document_tf_plain.cpu())
+        print(
+            "[Server][P4-debug] OKVS setup: "
+            f"num_docs={p4_setup.num_docs}, slots={p4_setup.table.size}, "
+            f"value_size={p4_setup.table.value_size}, seed_prefix={p4_setup.table.seed[:8].hex()}"
+        )
+        server.send(p4_setup)
+        p4_request = server.receive()
+        print(f"[Server][P4-debug] received OPRF blind request count={len(p4_request.elements)}")
+        if p4_request.elements:
+            print(f"[Server][P4-debug] first blinded element prefix={hex(p4_request.elements[0])[:34]}")
+        p4_response = p4_server.evaluate_oprf(p4_request)
+        print(f"[Server][P4-debug] sending OPRF response count={len(p4_response.elements)}")
+        server.send(p4_response)
 
+        weighted_tf_remote = server.receive()
+        tf_remote = server.receive()
+        weighted_tf_share = weighted_tf_remote[0]
+        tf_share = tf_remote[0]
+        length_norm_plain = RAG_CONFIG.bm25_k1 * (
+            1.0
+            - RAG_CONFIG.bm25_b
+            + RAG_CONFIG.bm25_b * document_lengths_plain / default_average_length(document_lengths_plain)
+        )
+        s_length_norm_local, s_length_norm_remote = share_data(length_norm_plain)
+        server.send(s_length_norm_remote)
+        length_norm_share = s_length_norm_local[0]
+        lexical_scores_share, lexical_contrib_share = secure_bm25_scores_from_shares(
+            weighted_tf_share,
+            tf_share,
+            length_norm_share,
+        )
+        print(f"[Server][P2-debug] received weighted_tf share shape={weighted_tf_share.shape}")
+        print(f"[Server][P2-debug] received tf share shape={tf_share.shape}")
+        print(f"[Server][P2-debug] local length_norm share shape={length_norm_share.shape}")
+        print(f"[Server][P2-debug] secure BM25 contribution share shape={lexical_contrib_share.shape}")
+        print(f"[Server][P2-debug] secure BM25 score share shape={lexical_scores_share.shape}")
 
-        # 【第二路：词汇检索 BM25 Path】
-        print("[Server] RAG: 执行词汇路(BM25) 打分与排序...")
-        
-        # 1. 接收 Client 发来的多热编码 Query Share
-        my_query_multihot_share = server.receive()[0]
-        
-        # 2. 调用真正的 BM25 密态打分函数
-        scores_lex_share = secure_bm25_scoring_placeholder(my_query_multihot_share, my_bm25_matrix_share)
-        
-        # 3. 完美复用之前写好的密态冒泡排序算法！
-        #top_k_docs_lex_share = secure_top_k_retrieval_placeholder(scores_lex_share, my_db_share, k=TOP_K)
+        semantic_result = protocol1_finish_from_candidate_mask(
+            query_emb_share,
+            my_db_share,
+            candidate_mask=candidate_mask_plain.cpu(),
+            top_k=TOP_K,
+        )
+        semantic_scores = semantic_result.scores
+        lexical_scores = lexical_scores_share
+        lexical_topk = secure_top_k_indicators(lexical_scores_share, TOP_K, return_audit=True)
+        lexical_indicators = lexical_topk.indicators
+
+        server.send(semantic_result.indicators)
+        server.send(lexical_indicators)
+        semantic_indicators_plain = server.receive().cpu()
+        lexical_indicators_plain = server.receive().cpu()
+        print(f"[Server][Semantic-PIR-query] received client-restored top-k indicators shape={tuple(semantic_indicators_plain.shape)}")
+        print(f"[Server][Lexical-PIR-query] received client-restored top-k indicators shape={tuple(lexical_indicators_plain.shape)}")
+
+        pir_backend = SudaPIRToSharePlaintextProtocolBackend(modulus=65_537, seed=20260708)
+        semantic_pir = suda_pir_to_share(semantic_indicators_plain, db_tokens_onehot.cpu(), backend=pir_backend)
+        lexical_pir = suda_pir_to_share(lexical_indicators_plain, db_tokens_onehot.cpu(), backend=pir_backend)
+        server.send(semantic_pir.client_share)
+        server.send(audit_message(semantic_pir.audit))
+        server.send(lexical_pir.client_share)
+        server.send(audit_message(lexical_pir.audit))
+        my_doc_sem_share = ass_from_plain_share(semantic_pir.server_share)
+        my_doc_lex_share = ass_from_plain_share(lexical_pir.server_share)
+        print(f"[Server][P3-debug] masked semantic_scores shape={semantic_scores.shape}")
+        print(f"[Server][P4-debug] lexical_scores_share shape={lexical_scores.shape}")
+        print_topk_audit("Server", "Semantic", semantic_result.topk_audit)
+        print_topk_audit("Server", "Lexical", lexical_topk.audit)
+        print_pir_audit("Server", "Semantic", semantic_pir)
+        print_pir_audit("Server", "Lexical", lexical_pir)
 
         # ---------------------------------------------------------
         # 5. 还原结果进行验证 (这里验证一下语义路的结果)
@@ -347,21 +399,7 @@ def run_server():
 
 
 
-        # 调用排序，拿到的是指示器 [1, 10]
-        top_k_ind_sem_share = secure_top_k_retrieval_placeholder(scores_sem_share, k=TOP_K)
-        top_k_ind_lex_share = secure_top_k_retrieval_placeholder(scores_lex_share, k=TOP_K)
-        
-        print("[融合] 通过密态指示器，提取真实 Token 序列...")
-        # 魔法发生的地方：[1, 10] -> [1, 10, 1, 1] 广播乘以 [10, 24, 30522]
-        # 然后把维度 1 加起来，就完美提取出了 [1, 24, 30522] 的目标文档！
-        
-        # 1). 提取语义路真实文档 Token
-        expanded_ind_sem = top_k_ind_sem_share.unsqueeze(-1).unsqueeze(-1)
-        my_doc_sem_share = (expanded_ind_sem * my_db_tokens_share).sum(dim=1)
-        
-        # 2). 提取 BM25路真实文档 Token
-        expanded_ind_lex = top_k_ind_lex_share.unsqueeze(-1).unsqueeze(-1)
-        my_doc_lex_share = (expanded_ind_lex * my_db_tokens_share).sum(dim=1)
+        print("[融合] 使用 Suda PIR-to-share 输出的密态文档拼接真实 Token 序列...")
 
         # 3). 拿到 Client 发来的 Query Share，直接拼接！
         my_query_share = sh_in[0]
@@ -391,6 +429,7 @@ def run_server():
 def run_client():
     client.online()
     with PartyRuntime(client):
+        print_pisces_contract("Client")
         # ---------------------------------------------------------
         # 1. 接收模型 (Encoder)
         # ---------------------------------------------------------
@@ -427,16 +466,6 @@ def run_client():
         c_db_remote = client.receive()
         my_db_share = c_db_remote[0]
 
-        # 【接收 BM25 知识库】
-        print("[Client] 接收 BM25 密态索引矩阵...")
-        c_bm25_remote = client.receive()
-        my_bm25_matrix_share = c_bm25_remote[0]
-
-        # 接收文档 Token 数据库
-        print("[Client] 接收文档 Token 数据库...")
-        c_db_tokens_remote = client.receive()
-        my_db_tokens_share = c_db_tokens_remote[0]
-
         # ---------------------------------------------------------
         # 3. 发送 Query 并提取特征
         # ---------------------------------------------------------
@@ -447,7 +476,12 @@ def run_client():
         client.send(RingTensor.convert_to_ring(mask))
         
         _, pool = model(s_ids[0][0], s_pos[0][0], s_typ[0][0], RingTensor.convert_to_ring(mask))
-        query_emb_share = pool
+        bert_query_emb_share = pool
+        semantic_query_plain = demo_semantic_query_embedding()
+        s_sem_query_local, s_sem_query_remote = share_data(semantic_query_plain)
+        query_emb_share = s_sem_query_local[0]
+        client.send(s_sem_query_remote)
+        print("[Client][P3-debug] shared semantic query embedding for Protocol 3/semantic fine scoring.")
         # dummy_query_plain = torch.randn(1, 128).to(DEVICE)
         # s_query_local, s_query_remote = share_data(dummy_query_plain)
         # query_emb_share = s_query_local[0]
@@ -457,33 +491,110 @@ def run_client():
         # 4. RAG 核心流程 (参与距离计算 -> 参与召回)
         # ---------------------------------------------------------
         print("[Client] RAG: 参与双路密态打分与召回...")
-        
-        # 【第一路：语义检索 Semantic Path】
-        scores_sem_share = secure_distance_computation_placeholder(query_emb_share, my_db_share)
-        
-        # client.send(scores_sem_share)
 
-        #top_k_docs_sem_share = secure_top_k_retrieval_placeholder(scores_sem_share, my_db_share, k=TOP_K)
+        # 【第一路：语义检索 coarse filter via Pisces Protocol 3】
+        print("[Client] RAG: 执行语义路 Protocol 3 (SimHash projections + OKVS + Paillier/Shamir filter)...")
+        p3_setup = client.receive()
+        print(
+            "[Client][P3-debug] received setup: "
+            f"simhash_bits={p3_setup.simhash_bits}, masks={len(p3_setup.masks)}, "
+            f"projection_weight={p3_setup.projection_weight}, bucket_capacity={p3_setup.bucket_capacity}, "
+            f"OKVS slots={p3_setup.table.size}, value_size={p3_setup.table.value_size}"
+        )
+        p1_client = Protocol1Client(protocol3=Protocol3Client(shuffle_seed=b"rag-protocol3-client"))
+        p3_message = p1_client.make_filter_query(semantic_query_plain.cpu(), p3_setup)
+        client.send(p3_message)
+        candidate_mask_plain = client.receive().to(DEVICE)
+        print(
+            f"[Client][P3-debug] decoded buckets={len(p1_client.protocol3.state.decoded_buckets)}, "
+            f"decoded ciphertexts={len(p1_client.protocol3.state.decoded_ciphertexts)}, "
+            f"candidate_mask={candidate_mask_plain.tolist()}"
+        )
+        
+        # 【第二路：词汇检索 BM25 Path via Pisces Protocol 4】
+        print("[Client] RAG: 执行词汇路 Protocol 4 (OPRF + OKVS + AES labels)...")
+        query_tokens = QUERY_BM25_TOKENS.to(DEVICE)
+        print(f"[Client][P4-debug] query tokens={query_tokens.tolist()}")
+        p4_setup = client.receive()
+        print(
+            "[Client][P4-debug] received OKVS setup: "
+            f"num_docs={p4_setup.num_docs}, slots={p4_setup.table.size}, "
+            f"value_size={p4_setup.table.value_size}, seed_prefix={p4_setup.table.seed[:8].hex()}"
+        )
+        p4_client = Protocol4Client(oprf_client=DHOPRFClient(params=DHOPRFParams()))
+        p4_request = p4_client.make_query(query_tokens.cpu())
+        print(f"[Client][P4-debug] sending OPRF blind request count={len(p4_request.elements)}")
+        if p4_request.elements:
+            print(f"[Client][P4-debug] first blinded element prefix={hex(p4_request.elements[0])[:34]}")
+        client.send(p4_request)
+        p4_response = client.receive()
+        print(f"[Client][P4-debug] received OPRF response count={len(p4_response.elements)}")
+        tf_recovered = p4_client.recover_term_frequencies(p4_response, p4_setup).to(DEVICE)
+        print(f"[Client][P4-debug] recovered TF shape={tuple(tf_recovered.shape)}")
+        print(f"[Client][P4-debug] recovered TF matrix:\n{tf_recovered}")
 
+        df = (tf_recovered > 0).sum(dim=0).float()
+        idf = torch.log1p((p4_setup.num_docs - df + 0.5) / (df + 0.5))
+        weighted_tf_plain = idf.unsqueeze(0) * (RAG_CONFIG.bm25_k1 + 1.0) * tf_recovered
+        print(f"[Client][P2-debug] df per query token={df.tolist()}")
+        print(f"[Client][P2-debug] idf per query token={idf.tolist()}")
+        print("[Client][P2-debug] document length terms stay server-side; client only shares TF-derived BM25 numerator.")
+        print(f"[Client][P2-debug] weighted_tf numerator matrix:\n{weighted_tf_plain}")
+        s_weighted_tf_local, s_weighted_tf_remote = share_data(weighted_tf_plain)
+        s_tf_local, s_tf_remote = share_data(tf_recovered)
+        client.send(s_weighted_tf_remote)
+        client.send(s_tf_remote)
+        length_norm_remote = client.receive()
+        length_norm_share = length_norm_remote[0]
+        lexical_scores_share, lexical_contrib_share = secure_bm25_scores_from_shares(
+            s_weighted_tf_local[0],
+            s_tf_local[0],
+            length_norm_share,
+        )
+        print(f"[Client][P2-debug] shared weighted_tf shape={s_weighted_tf_local[0].shape}")
+        print(f"[Client][P2-debug] shared tf shape={s_tf_local[0].shape}")
+        print(f"[Client][P2-debug] received length_norm share shape={length_norm_share.shape}")
+        print(f"[Client][P2-debug] secure BM25 contribution share shape={lexical_contrib_share.shape}")
+        print(f"[Client][P2-debug] secure BM25 score share shape={lexical_scores_share.shape}")
 
-        # 【第二路：词汇检索 BM25 Path】
-        print("[Client] RAG: 执行词汇路(BM25) 打分与排序...")
-        
-        # 1. 模拟 Client 将搜索词（比如 "apple" 和 "price"）转成了词表索引 5 和 8
-        query_multihot_plain = torch.zeros(VOCAB_SIZE_BM25, 1).to(DEVICE)
-        query_multihot_plain[5, 0] = 1.0
-        query_multihot_plain[8, 0] = 1.0
-        
-        # 2. 把多热编码 Query 切片并发送给 Server
-        s_qhot_local, s_qhot_remote = share_data(query_multihot_plain)
-        my_query_multihot_share = s_qhot_local[0]
-        client.send(s_qhot_remote)
-        
-        # 3. 调用真正的 BM25 密态打分函数
-        scores_lex_share = secure_bm25_scoring_placeholder(my_query_multihot_share, my_bm25_matrix_share)
-        
-        # 4. 复用密态冒泡排序
-        #top_k_docs_lex_share = secure_top_k_retrieval_placeholder(scores_lex_share, my_db_share, k=TOP_K)
+        semantic_result = protocol1_finish_from_candidate_mask(
+            query_emb_share,
+            my_db_share,
+            candidate_mask=candidate_mask_plain.cpu(),
+            top_k=TOP_K,
+        )
+        semantic_scores = semantic_result.scores
+        lexical_scores = lexical_scores_share
+        lexical_topk = secure_top_k_indicators(lexical_scores_share, TOP_K, return_audit=True)
+        lexical_indicators = lexical_topk.indicators
+
+        semantic_indicators_server = client.receive()
+        lexical_indicators_server = client.receive()
+        semantic_indicators_plain = ArithmeticSecretSharing.restore_from_shares(
+            semantic_indicators_server,
+            semantic_result.indicators,
+        ).convert_to_real_field().round().cpu()
+        lexical_indicators_plain = ArithmeticSecretSharing.restore_from_shares(
+            lexical_indicators_server,
+            lexical_indicators,
+        ).convert_to_real_field().round().cpu()
+        print(f"[Client][Semantic-PIR-query] restored top-k indicators:\n{semantic_indicators_plain}")
+        print(f"[Client][Lexical-PIR-query] restored top-k indicators:\n{lexical_indicators_plain}")
+        client.send(semantic_indicators_plain)
+        client.send(lexical_indicators_plain)
+
+        semantic_client_share = client.receive()
+        semantic_pir_audit = client.receive()
+        lexical_client_share = client.receive()
+        lexical_pir_audit = client.receive()
+        my_doc_sem_share = ass_from_plain_share(semantic_client_share)
+        my_doc_lex_share = ass_from_plain_share(lexical_client_share)
+        print(f"[Client][P3-debug] masked semantic_scores shape={semantic_scores.shape}")
+        print(f"[Client][P4-debug] lexical_scores_share shape={lexical_scores.shape}")
+        print_topk_audit("Client", "Semantic", semantic_result.topk_audit)
+        print_topk_audit("Client", "Lexical", lexical_topk.audit)
+        print_pir_audit("Client", "Semantic", semantic_pir_audit)
+        print_pir_audit("Client", "Lexical", lexical_pir_audit)
 
         # ---------------------------------------------------------
         # 5. 配合还原结果 (发送语义路的 Share 给 Server)
@@ -515,21 +626,7 @@ def run_client():
         # my_joint_ids_share = ArithmeticSecretSharing.cat([my_query_share, my_doc_sem_share, my_doc_lex_share], dim=1)
 
 
-        # 调用排序，拿到的是指示器 [1, 10]
-        top_k_ind_sem_share = secure_top_k_retrieval_placeholder(scores_sem_share, k=TOP_K)
-        top_k_ind_lex_share = secure_top_k_retrieval_placeholder(scores_lex_share, k=TOP_K)
-        
-        print("[融合] 通过密态指示器，提取真实 Token 序列...")
-        # 魔法发生的地方：[1, 10] -> [1, 10, 1, 1] 广播乘以 [10, 24, 30522]
-        # 然后把维度 1 加起来，就完美提取出了 [1, 24, 30522] 的目标文档！
-        
-        # 1). 提取语义路真实文档 Token
-        expanded_ind_sem = top_k_ind_sem_share.unsqueeze(-1).unsqueeze(-1)
-        my_doc_sem_share = (expanded_ind_sem * my_db_tokens_share).sum(dim=1)
-        
-        # 2). 提取 BM25路真实文档 Token
-        expanded_ind_lex = top_k_ind_lex_share.unsqueeze(-1).unsqueeze(-1)
-        my_doc_lex_share = (expanded_ind_lex * my_db_tokens_share).sum(dim=1)
+        print("[融合] 使用 Suda PIR-to-share 输出的密态文档拼接真实 Token 序列...")
 
         # 3). 拿到 Client 发来的 Query Share，直接拼接！
         my_query_share = s_ids[0][0]
@@ -573,7 +670,10 @@ def run_client():
     client.close()
 
 if __name__ == "__main__":
-    gen_params()
+    if os.environ.get("SKIP_GEN_PARAMS") == "1":
+        print("=== [Init] SKIP_GEN_PARAMS=1，跳过辅助参数生成 ===\n")
+    else:
+        gen_params()
     t1 = threading.Thread(target=run_server)
     t2 = threading.Thread(target=run_client)
     t1.start(); t2.start()
