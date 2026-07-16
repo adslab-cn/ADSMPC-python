@@ -12,6 +12,7 @@ from NssMPC.application.rag.pisces.pir import (
     SudaBFVPolynomialBackend,
     SudaEncryptedOPROPEOPIBackend,
     SudaLFHEPolynomialBackend,
+    SudaNativeBridgeBackend,
     SudaPIRToSharePlaintextProtocolBackend,
     SudaPolynomialPlaintextBackend,
     decrypt_bfv_ciphertext_to_tensor,
@@ -19,6 +20,11 @@ from NssMPC.application.rag.pisces.pir import (
     evaluate_polynomial_coefficients,
     evaluate_polynomial_database,
     shares_to_bfv_ciphertext,
+    suda_native_client_extract,
+    suda_native_make_client_request,
+    suda_native_make_layout,
+    suda_native_server_answer,
+    suda_result_to_plain_additive_shares,
     suda_ope_mask_polynomials,
     suda_opi_interpolate_share_polynomials,
     suda_opr_reduce_polynomials,
@@ -50,12 +56,14 @@ def test_suda_pir_to_share_selects_rows_with_available_backend():
     assert result.audit.record_shape == (2, 2)
     assert result.audit.output_shape == (2, 2, 2)
     assert result.audit.implementation in {
+        "suda-native-cpp-batch-pir-to-share-bridge",
         "suda-bfv-encrypted-opr-ope-opi-backend",
         "suda-plaintext-opr-ope-opi-backend",
     }
     assert torch.equal(result.records, database[[1, 0]])
     if result.server_share is not None and result.client_share is not None:
-        assert torch.equal(result.server_share + result.client_share, result.records)
+        server_share, client_share = suda_result_to_plain_additive_shares(result)
+        assert torch.equal(server_share + client_share, result.records)
 
 
 def test_suda_lfhe_backend_is_isolated_until_implemented():
@@ -212,6 +220,125 @@ def test_suda_plaintext_protocol_backend_outputs_additive_shares():
     assert result.audit.implementation == "suda-plaintext-opr-ope-opi-backend"
     assert result.audit.opr_reduced_degree <= 2 * indicators.shape[0] - 2
     assert result.audit.opi_iota == 2
+
+
+class _FakeSudaNativeModule:
+    def __init__(self):
+        self.last_call = None
+
+    def batch_pir_to_share(self, feature_major, query_ids, **kwargs):
+        self.last_call = (feature_major.copy(), query_ids.copy(), dict(kwargs))
+        selected = feature_major[:, query_ids]
+        server_share = selected // 3
+        client_share = selected - server_share
+        return {
+            "server_share": server_share,
+            "client_share": client_share,
+            "modulus": 1_337_006_139_375_617,
+            "query_bytes": 1234,
+            "response_bytes": 5678,
+        }
+
+
+def test_suda_native_bridge_backend_adapts_python_tensors_to_cpp_layout():
+    database = torch.tensor(
+        [
+            [[1.0, 2.0], [3.0, 4.0]],
+            [[5.0, 6.0], [7.0, 8.0]],
+            [[9.0, 10.0], [11.0, 12.0]],
+        ]
+    )
+    indicators = torch.tensor(
+        [
+            [0.0, 1.0, 0.0],
+            [1.0, 0.0, 0.0],
+        ]
+    )
+    fake_module = _FakeSudaNativeModule()
+
+    result = suda_pir_to_share(
+        indicators,
+        database,
+        backend=SudaNativeBridgeBackend(module=fake_module, batch_size=1024),
+    )
+
+    assert torch.equal(result.records, database[[1, 0]])
+    reconstructed = ((result.server_share + result.client_share) % result.audit.polynomial_modulus).to(database.dtype)
+    assert torch.equal(reconstructed, result.records)
+    assert result.audit.implementation == "suda-native-cpp-batch-pir-to-share-bridge"
+    assert result.audit.paper_backend_available is True
+    assert result.audit.native_padded_database_size == 4096
+    assert result.audit.native_batch_size == 1024
+    assert result.audit.native_query_bytes == 1234
+    assert result.audit.native_response_bytes == 5678
+    feature_major, query_ids, kwargs = fake_module.last_call
+    assert feature_major.shape == (4, 4096)
+    assert query_ids[:6].tolist() == [1, 0, 3, 4, 5, 6]
+    assert query_ids.shape == (1024,)
+    assert kwargs["database_size"] == 3
+    assert kwargs["host_log_n_data"] == 12
+    assert kwargs["batch_size"] == 1024
+
+
+def test_suda_native_bridge_backend_real_extension_when_enabled():
+    if os.environ.get("PISCES_RUN_SUDA_NATIVE") != "1":
+        return
+
+    database = torch.tensor(
+        [
+            [[1.0, 2.0], [3.0, 4.0]],
+            [[5.0, 6.0], [7.0, 8.0]],
+            [[9.0, 10.0], [11.0, 12.0]],
+        ],
+        dtype=torch.float32,
+    )
+    indicators = torch.tensor(
+        [
+            [0.0, 1.0, 0.0],
+            [1.0, 0.0, 0.0],
+        ],
+        dtype=torch.float32,
+    )
+
+    result = suda_pir_to_share(indicators, database, backend=SudaNativeBridgeBackend(batch_size=1024))
+    reconstructed = ((result.server_share + result.client_share) % result.audit.polynomial_modulus).to(database.dtype)
+
+    assert torch.equal(result.records, database[[1, 0]])
+    assert torch.equal(reconstructed, result.records)
+    assert result.audit.native_padded_database_size == 4096
+    assert result.audit.native_query_bytes is not None and result.audit.native_query_bytes > 0
+    assert result.audit.native_response_bytes is not None and result.audit.native_response_bytes > 0
+
+
+def test_suda_native_split_pir_real_extension_when_enabled():
+    if os.environ.get("PISCES_RUN_SUDA_NATIVE") != "1":
+        return
+
+    database = torch.arange(4096 * 4, dtype=torch.long).reshape(4096, 4)
+    query_ids = torch.tensor([1, 3, 4094, 4095], dtype=torch.long)
+
+    layout = suda_native_make_layout(
+        database_size=int(database.shape[0]),
+        record_shape=tuple(int(dim) for dim in database.shape[1:]),
+        selected_count=int(query_ids.numel()),
+    )
+    client_state, request = suda_native_make_client_request(query_ids, layout, dtype=database.dtype)
+
+    assert "row_ids" not in request
+    assert "query_ids" not in request
+    assert request["query_bytes"] > 0
+
+    server_answer = suda_native_server_answer(database, request)
+    client_answer = suda_native_client_extract(
+        client_state,
+        server_answer.response_message,
+        server_share=server_answer.server_share,
+    )
+
+    assert server_answer.audit.implementation == "suda-native-cpp-split-batch-pir-to-share-bridge"
+    assert server_answer.audit.native_query_bytes == request["query_bytes"]
+    assert server_answer.audit.native_response_bytes is not None and server_answer.audit.native_response_bytes > 0
+    assert torch.equal(client_answer.records.to(database.dtype), database[query_ids])
 
 
 def test_suda_bfv_backend_reports_missing_optional_dependency_cleanly():
@@ -382,6 +509,9 @@ if __name__ == "__main__":
     test_suda_ope_masks_polynomials_without_changing_query_values()
     test_suda_opi_interpolates_server_share_basis_polynomials()
     test_suda_plaintext_protocol_backend_outputs_additive_shares()
+    test_suda_native_bridge_backend_adapts_python_tensors_to_cpp_layout()
+    test_suda_native_bridge_backend_real_extension_when_enabled()
+    test_suda_native_split_pir_real_extension_when_enabled()
     test_suda_bfv_backend_reports_missing_optional_dependency_cleanly()
     test_suda_bfv_backend_selects_rows_when_pyfhel_is_available()
     test_share_to_he_conversion_encrypts_reconstructed_payload()

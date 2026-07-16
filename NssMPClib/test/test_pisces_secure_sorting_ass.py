@@ -72,14 +72,19 @@ def test_secure_top_k_ass_two_party_runtime():
         for name, restored, audit in case_outputs:
             assert torch.equal(restored, expected_by_name[name])
             assert audit.backend == "arithmetic_secret_sharing"
-            assert audit.network == "panther-approx-topk-ass-exact-ass"
+            assert audit.network in {"openpanther-gc-approx-topk", "panther-approx-topk-ass-exact-ass"}
             assert audit.algorithm == "panther-approx-topk-then-exact-topk"
             assert audit.num_items == 6
             assert audit.top_k == 5
             assert audit.k_prime == 6
             assert audit.bin_comparisons == 0
-            assert audit.exact_comparisons == 19
-            assert audit.comparisons == 19
+            if audit.network == "openpanther-gc-approx-topk":
+                assert audit.paper_backend_available is True
+                assert audit.gc_value_bits == 31
+                assert audit.gc_communication_bytes is not None
+            else:
+                assert audit.exact_comparisons == 19
+                assert audit.comparisons == 19
 
 
 if __name__ == "__main__":

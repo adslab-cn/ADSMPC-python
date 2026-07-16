@@ -1,8 +1,8 @@
 """Protocol interfaces and local fallbacks for Pisces.
 
 The concrete Pisces paper protocols are:
-- Protocol 3: oblivious filter over SimHash/Hamming distance.
-- Protocol 4: multi-instance labeled PSI for BM25 term frequencies.
+- Protocol 3: ∏Oblivious Filter over SimHash/Hamming distance.
+- Protocol 4: ∏MultLPSI for BM25 term frequencies.
 - batch PIR-to-share for retrieving selected chunks.
 
 The classes below provide deterministic local substitutes so the retrieval
@@ -89,4 +89,3 @@ class LocalTermFrequencyPSI:
         if query_tokens.dim() != 1:
             query_tokens = query_tokens.reshape(-1)
         return document_term_frequency[query_tokens.long()].transpose(0, 1)
-

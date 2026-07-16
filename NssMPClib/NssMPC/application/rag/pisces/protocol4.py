@@ -1,4 +1,4 @@
-"""Interactive Pisces Protocol 4 implementation."""
+"""Interactive Pisces Protocol 4: ∏MultLPSI."""
 
 from __future__ import annotations
 
@@ -28,7 +28,7 @@ class Protocol4PublicSetup:
 
 
 class Protocol4Server:
-    """Server side of Pisces Protocol 4.
+    """Server side of Pisces ∏MultLPSI.
 
     The server builds the OKVS over encrypted term-frequency labels and answers
     OPRF blind-evaluation requests. It never receives the client's query tokens.
@@ -99,7 +99,7 @@ class Protocol4Server:
 
 
 class Protocol4Client:
-    """Client side of Pisces Protocol 4."""
+    """Client side of Pisces ∏MultLPSI."""
 
     def __init__(
         self,
@@ -160,7 +160,7 @@ def protocol4_label_key(doc_id: int, prf_value: bytes) -> bytes:
 
 
 def run_protocol4_server(party, protocol: Protocol4Server, document_term_frequency: torch.Tensor) -> Protocol4PublicSetup:
-    """Run Protocol 4 on a NssMPClib server party.
+    """Run ∏MultLPSI on a NssMPClib server party.
 
     Message order:
     1. server -> client: public OKVS setup
@@ -177,7 +177,7 @@ def run_protocol4_server(party, protocol: Protocol4Server, document_term_frequen
 
 
 def run_protocol4_client(party, protocol: Protocol4Client, query_tokens: torch.Tensor) -> torch.Tensor:
-    """Run Protocol 4 on a NssMPClib client party and return recovered TF."""
+    """Run ∏MultLPSI on a NssMPClib client party and return recovered TF."""
 
     setup = party.receive()
     request = protocol.make_query(query_tokens)

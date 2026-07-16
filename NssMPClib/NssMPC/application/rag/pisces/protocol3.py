@@ -1,4 +1,4 @@
-"""Pisces Protocol 3 oblivious filter.
+"""Pisces Protocol 3: ∏Oblivious Filter.
 
 This follows the protocol structure from the Pisces paper: projected SimHash
 exact matching, 2-out-of-T Shamir reconstruction in the encrypted domain,
@@ -100,7 +100,7 @@ class AdditivePaillier:
 
 
 class Protocol3Server:
-    """Server side of Pisces Protocol 3."""
+    """Server side of Pisces ∏Oblivious Filter."""
 
     def __init__(
         self,
@@ -228,7 +228,7 @@ class Protocol3Server:
 
 
 class Protocol3Client:
-    """Client side of Pisces Protocol 3."""
+    """Client side of Pisces ∏Oblivious Filter."""
 
     def __init__(
         self,
@@ -331,7 +331,7 @@ def protocol3_plain_projection_candidates(
     *,
     min_matches: int = 2,
 ) -> tuple[int, ...]:
-    """Plain reference for the Protocol 3 projected exact-match predicate."""
+    """Plain reference for the ∏Oblivious Filter projected exact-match predicate."""
 
     if document_bits.dim() != 2:
         raise ValueError("document_bits must have shape [num_docs, simhash_bits]")
@@ -424,7 +424,7 @@ def run_protocol3_server(
     *,
     chunks: Sequence[Any] | None = None,
 ) -> tuple[Protocol3Document, ...]:
-    """Run Protocol 3 on a server party.
+    """Run ∏Oblivious Filter on a server party.
 
     Message order:
     1. server -> client: public HE key, projection masks, projection points, OKVS
@@ -438,7 +438,7 @@ def run_protocol3_server(
 
 
 def run_protocol3_client(party, protocol: Protocol3Client, query_bits: torch.Tensor) -> Protocol3ClientMessage:
-    """Run Protocol 3 on a client party and send shuffled encrypted secrets."""
+    """Run ∏Oblivious Filter on a client party and send shuffled encrypted secrets."""
 
     setup = party.receive()
     message = protocol.filter_from_bits(query_bits, setup)

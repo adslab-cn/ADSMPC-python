@@ -1,4 +1,4 @@
-"""Pisces Protocol 4 support: OKVS-backed multi-instance labeled PSI."""
+"""Pisces Protocol 4 support: OKVS-backed ∏MultLPSI."""
 
 from __future__ import annotations
 
@@ -36,7 +36,7 @@ class LocalHMACOPRF:
 
 @dataclass
 class AESCTRLabelCipher:
-    """AES-CTR label encryption for Pisces Protocol 4.
+    """AES-CTR label encryption for Pisces ∏MultLPSI.
 
     Pisces describes AES encryption for ``0^lambda || tf`` labels. We use a
     deterministic AES-CTR nonce derived from the per-label key so OKVS values
@@ -99,7 +99,7 @@ def kdf(domain: bytes, *parts: bytes, size: int = 32) -> bytes:
 
 
 class OKVSMultiInstanceLabeledPSI:
-    """Pisces Protocol 4 data flow over a binary OKVS.
+    """Pisces ∏MultLPSI data flow over a binary OKVS.
 
     This implements the server OKVS setup, client decode/decrypt path, and
     prefix validation. OPRF is represented by ``OPRFClient`` and defaults to a

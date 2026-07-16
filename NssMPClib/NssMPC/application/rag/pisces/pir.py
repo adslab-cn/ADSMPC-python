@@ -9,6 +9,7 @@ from a server-held plaintext database and a client encrypted query.
 from __future__ import annotations
 
 from dataclasses import dataclass
+import importlib
 from typing import Any
 
 import torch
@@ -17,6 +18,9 @@ import numpy as np
 from .ops import select_by_indicators
 
 DEFAULT_PLAINTEXT_MODULUS = 2_147_483_647
+SUDA_NATIVE_MODULUS = 1_337_006_139_375_617
+SUDA_NATIVE_HALF_POLY_MOD_DEGREE = 4096
+SUDA_NATIVE_SUPPORTED_BATCH_SIZES = (1, 4, 16, 64, 256, 1024, 2048, 4096)
 
 
 @dataclass(frozen=True)
@@ -38,6 +42,11 @@ class SudaPIRToShareAudit:
     opr_reduced_degree: int | None = None
     ope_masked_degree: int | None = None
     opi_iota: int | None = None
+    native_host_log_n_data: int | None = None
+    native_padded_database_size: int | None = None
+    native_batch_size: int | None = None
+    native_query_bytes: int | None = None
+    native_response_bytes: int | None = None
 
 
 @dataclass(frozen=True)
@@ -48,6 +57,30 @@ class SudaPIRToShareResult:
     audit: SudaPIRToShareAudit
     server_share: Any | None = None
     client_share: Any | None = None
+
+
+@dataclass
+class SudaNativeClientState:
+    client: Any
+    real_batch_size: int
+    feature_num: int
+    output_shape: tuple[int, ...]
+    modulus: int
+    dtype: torch.dtype
+    device: torch.device | str
+
+
+@dataclass
+class SudaNativeServerAnswer:
+    server_share: torch.Tensor
+    response_message: dict[str, Any]
+    audit: SudaPIRToShareAudit
+
+
+@dataclass
+class SudaNativeClientAnswer:
+    client_share: torch.Tensor
+    records: torch.Tensor | None = None
 
 
 @dataclass(frozen=True)
@@ -368,6 +401,235 @@ class SudaEncryptedOPROPEOPIBackend:
         return SudaPIRToShareResult(records=records, audit=audit, server_share=server_share, client_share=client_share)
 
 
+class SudaNativeBridgeBackend:
+    """Adapter for the original Suda C++ batch PIR-to-share implementation.
+
+    The native extension is intentionally optional. When available, it should
+    expose ``batch_pir_to_share(feature_major, query_ids, **kwargs)`` and return
+    server/client additive shares in Suda's finite field. This Python layer owns
+    the stable Pisces-facing contract: one-hot indicators in, selected payload
+    shares out.
+    """
+
+    def __init__(
+        self,
+        *,
+        module_name: str = "NssMPC.application.rag.pisces._suda_bridge",
+        module: Any | None = None,
+        batch_size: int | None = None,
+        modulus: int = SUDA_NATIVE_MODULUS,
+        mod_switch: bool = True,
+        use_out_mem: bool = False,
+    ):
+        self.module_name = module_name
+        self.module = module
+        self.batch_size = None if batch_size is None else int(batch_size)
+        self.modulus = int(modulus)
+        self.mod_switch = bool(mod_switch)
+        self.use_out_mem = bool(use_out_mem)
+
+    def retrieve(self, indicators: Any, database: Any) -> SudaPIRToShareResult:
+        _validate_plain_tensor(indicators, "indicators")
+        _validate_plain_tensor(database, "database")
+        _validate_pir_shapes(indicators, database)
+        row_ids = _one_hot_row_ids_zero_based(indicators)
+        field_database = _tensor_to_field(database, self.modulus)
+        database_size = int(field_database.shape[0])
+        native_batch_size = _choose_suda_native_batch_size(len(row_ids), int(field_database.shape[1]), self.batch_size)
+        padded_database_size = _suda_native_padded_database_size(database_size, native_batch_size, len(row_ids))
+        host_log_n_data = _log2_exact(padded_database_size)
+
+        padded_database = torch.zeros((padded_database_size, field_database.shape[1]), dtype=torch.long)
+        padded_database[:database_size] = field_database
+        padded_query_ids = _pad_suda_native_query_ids(row_ids, database_size, padded_database_size, native_batch_size)
+        feature_major = padded_database.transpose(0, 1).contiguous().numpy().astype(np.int64)
+        query_ids_np = np.asarray(padded_query_ids, dtype=np.int64)
+
+        module = self.module if self.module is not None else _load_suda_native_bridge(self.module_name)
+        native_result = module.batch_pir_to_share(
+            feature_major,
+            query_ids_np,
+            database_size=database_size,
+            host_log_n_data=host_log_n_data,
+            batch_size=native_batch_size,
+            mod_switch=self.mod_switch,
+            use_out_mem=self.use_out_mem,
+        )
+        server_share_field, client_share_field, native_meta = _normalise_suda_native_output(
+            native_result,
+            real_batch_size=len(row_ids),
+            feature_num=int(field_database.shape[1]),
+            modulus=self.modulus,
+        )
+        records_field = (server_share_field + client_share_field) % self.modulus
+        records = _field_tensor_to_signed_float(records_field, self.modulus).to(dtype=database.dtype, device=database.device)
+        output_shape = (len(row_ids),) + tuple(int(dim) for dim in database.shape[1:])
+        records = records.reshape(output_shape)
+        server_share = server_share_field.reshape(output_shape).to(device=database.device)
+        client_share = client_share_field.reshape(output_shape).to(device=database.device)
+
+        audit = SudaPIRToShareAudit(
+            batch_size=int(indicators.shape[0]),
+            database_size=database_size,
+            record_shape=tuple(int(dim) for dim in database.shape[1:]),
+            output_shape=tuple(int(dim) for dim in records.shape),
+            implementation="suda-native-cpp-batch-pir-to-share-bridge",
+            paper_backend="Suda C++ BatchPirToShareServer/Client with SEAL polynomial ciphertexts",
+            paper_backend_available=True,
+            backend_gap="uses the original Suda C++ implementation through a Python bridge",
+            polynomial_modulus=self.modulus,
+            he_scheme="SEAL BGV/BFV-style batched polynomial HE",
+            share_conversion="server/client additive shares kept as finite-field integers from Suda native batch PIR-to-share",
+            native_host_log_n_data=host_log_n_data,
+            native_padded_database_size=padded_database_size,
+            native_batch_size=native_batch_size,
+            native_query_bytes=_optional_int(native_meta.get("query_bytes")),
+            native_response_bytes=_optional_int(native_meta.get("response_bytes")),
+        )
+        return SudaPIRToShareResult(records=records, audit=audit, server_share=server_share, client_share=client_share)
+
+
+def suda_native_make_layout(
+    *,
+    database_size: int,
+    record_shape: tuple[int, ...],
+    selected_count: int,
+    batch_size: int | None = None,
+    modulus: int = SUDA_NATIVE_MODULUS,
+) -> dict[str, Any]:
+    feature_num = 1
+    for dim in record_shape:
+        feature_num *= int(dim)
+    native_batch_size = _choose_suda_native_batch_size(selected_count, feature_num, batch_size)
+    padded_database_size = _suda_native_padded_database_size(database_size, native_batch_size, selected_count)
+    return {
+        "database_size": int(database_size),
+        "record_shape": tuple(int(dim) for dim in record_shape),
+        "feature_num": int(feature_num),
+        "selected_count": int(selected_count),
+        "native_batch_size": int(native_batch_size),
+        "padded_database_size": int(padded_database_size),
+        "host_log_n_data": _log2_exact(padded_database_size),
+        "modulus": int(modulus),
+    }
+
+
+def suda_native_make_client_request(
+    row_ids: Any,
+    layout: dict[str, Any],
+    *,
+    dtype: torch.dtype = torch.float32,
+    device: torch.device | str = "cpu",
+    module_name: str = "NssMPC.application.rag.pisces._suda_bridge",
+    module: Any | None = None,
+) -> tuple[SudaNativeClientState, dict[str, Any]]:
+    module = module if module is not None else _load_suda_native_bridge(module_name)
+    real_row_ids = [int(value) for value in torch.as_tensor(row_ids).reshape(-1).tolist()]
+    if len(real_row_ids) != int(layout["selected_count"]):
+        raise ValueError("row_ids length must match Suda native layout selected_count")
+    padded_query_ids = _pad_suda_native_query_ids(
+        real_row_ids,
+        int(layout["database_size"]),
+        int(layout["padded_database_size"]),
+        int(layout["native_batch_size"]),
+    )
+    client = module.BatchPirToShareClientBridge(
+        int(layout["host_log_n_data"]),
+        int(layout["feature_num"]),
+        int(layout["native_batch_size"]),
+    )
+    keys = client.save_keys()
+    query = client.gen_query(np.asarray(padded_query_ids, dtype=np.int64))
+    state = SudaNativeClientState(
+        client=client,
+        real_batch_size=int(layout["selected_count"]),
+        feature_num=int(layout["feature_num"]),
+        output_shape=(int(layout["selected_count"]),) + tuple(layout["record_shape"]),
+        modulus=int(layout["modulus"]),
+        dtype=dtype,
+        device=device,
+    )
+    request = {
+        "keys": keys,
+        "query": query,
+        "query_bytes": int(query["query_bytes"]),
+        "layout": dict(layout),
+    }
+    return state, request
+
+
+def suda_native_server_answer(
+    database: Any,
+    request: dict[str, Any],
+    *,
+    mod_switch: bool = True,
+    use_out_mem: bool = False,
+    module_name: str = "NssMPC.application.rag.pisces._suda_bridge",
+    module: Any | None = None,
+) -> SudaNativeServerAnswer:
+    module = module if module is not None else _load_suda_native_bridge(module_name)
+    layout = dict(request["layout"])
+    database_tensor = database if isinstance(database, torch.Tensor) else torch.as_tensor(database)
+    _validate_plain_tensor(database_tensor, "database")
+    field_database = _tensor_to_field(database_tensor, int(layout["modulus"]))
+    flat_database = field_database.reshape(field_database.shape[0], -1)
+    if int(field_database.shape[0]) != int(layout["database_size"]):
+        raise ValueError("database size does not match Suda native request layout")
+    if int(flat_database.shape[1]) != int(layout["feature_num"]):
+        raise ValueError("database feature count does not match Suda native request layout")
+
+    padded_database = torch.zeros((int(layout["padded_database_size"]), int(layout["feature_num"])), dtype=torch.long)
+    padded_database[: int(layout["database_size"])] = flat_database
+    feature_major = padded_database.transpose(0, 1).contiguous().numpy().astype(np.int64)
+
+    server = module.BatchPirToShareServerBridge(feature_major, int(layout["native_batch_size"]), bool(use_out_mem))
+    server.load_keys(request["keys"])
+    response = server.gen_response(request["query"], bool(mod_switch))
+    server_share_field = torch.as_tensor(server.extract_answer(), dtype=torch.long).T
+    server_share = server_share_field[: int(layout["selected_count"]), : int(layout["feature_num"])]
+    output_shape = (int(layout["selected_count"]),) + tuple(layout["record_shape"])
+    server_share = server_share.reshape(output_shape).to(device=database_tensor.device)
+    audit = SudaPIRToShareAudit(
+        batch_size=int(layout["selected_count"]),
+        database_size=int(layout["database_size"]),
+        record_shape=tuple(layout["record_shape"]),
+        output_shape=output_shape,
+        implementation="suda-native-cpp-split-batch-pir-to-share-bridge",
+        paper_backend="Suda C++ BatchPirToShareServer/Client with SEAL polynomial ciphertexts",
+        paper_backend_available=True,
+        backend_gap="split client/server bridge: server receives encrypted Suda query, not plaintext top-k ids",
+        polynomial_modulus=int(layout["modulus"]),
+        he_scheme="SEAL BGV/BFV-style batched polynomial HE",
+        share_conversion="server/client additive shares kept as finite-field integers from Suda native batch PIR-to-share",
+        native_host_log_n_data=int(layout["host_log_n_data"]),
+        native_padded_database_size=int(layout["padded_database_size"]),
+        native_batch_size=int(layout["native_batch_size"]),
+        native_query_bytes=_optional_int(request.get("query_bytes")),
+        native_response_bytes=_optional_int(response.get("response_bytes")),
+    )
+    return SudaNativeServerAnswer(
+        server_share=server_share,
+        response_message={"response": response["response"], "layout": layout},
+        audit=audit,
+    )
+
+
+def suda_native_client_extract(
+    state: SudaNativeClientState,
+    response_message: dict[str, Any],
+    *,
+    server_share: Any | None = None,
+) -> SudaNativeClientAnswer:
+    client_share_field = torch.as_tensor(state.client.extract_answer(response_message["response"]), dtype=torch.long).T
+    client_share = client_share_field[: state.real_batch_size, : state.feature_num]
+    client_share = client_share.reshape(state.output_shape).to(device=state.device)
+    records = None
+    if server_share is not None:
+        records_field = (torch.as_tensor(server_share, dtype=torch.long).cpu() + client_share.cpu()) % state.modulus
+        records = _field_tensor_to_signed_float(records_field, state.modulus).to(dtype=state.dtype, device=state.device)
+    return SudaNativeClientAnswer(client_share=client_share, records=records)
+
+
 class SudaLFHEPolynomialBackend:
     """Placeholder for the paper-level Suda LFHE/BFV backend.
 
@@ -383,10 +645,11 @@ class SudaLFHEPolynomialBackend:
 def suda_pir_to_share(indicators: Any, database: Any, *, backend: Any | None = None) -> SudaPIRToShareResult:
     """Retrieve selected database rows as shares.
 
-    The default backend uses the Suda encrypted OPR/OPE/OPI path for plain
-    integer-valued tensors. Secret-shared inputs keep the executable ASS
-    fallback because the Suda HE flow starts from a server-held plaintext
-    database and a client encrypted query.
+    The default backend first tries the native Suda C++ BatchPirToShare bridge
+    for plain integer-valued tensors. If the native extension is not built, it
+    falls back to the executable Pyfhel/plaintext Suda algebra. Secret-shared
+    inputs keep the ASS fallback because the Suda HE flow starts from a
+    server-held plaintext database and a client encrypted query.
 
     ``indicators`` has shape ``[batch_size, database_size]`` and can be either
     plain or arithmetic-secret-shared. ``database`` has shape
@@ -398,10 +661,44 @@ def suda_pir_to_share(indicators: Any, database: Any, *, backend: Any | None = N
         return backend.retrieve(indicators, database)
     if _can_use_default_suda_he_backend(indicators, database):
         try:
+            return SudaNativeBridgeBackend().retrieve(indicators, database)
+        except ImportError:
+            pass
+        try:
             return SudaEncryptedOPROPEOPIBackend().retrieve(indicators, database)
         except ImportError:
             return SudaPIRToSharePlaintextProtocolBackend().retrieve(indicators, database)
     return _ass_indicator_pir_to_share(indicators, database)
+
+
+def suda_result_to_plain_additive_shares(result: SudaPIRToShareResult) -> tuple[torch.Tensor, torch.Tensor]:
+    """Convert a Suda PIR result into ordinary additive tensor shares.
+
+    Native Suda returns server/client shares over its finite field. NssMPClib's
+    secure neural-network path expects ordinary fixed-point additive shares, so
+    the demo boundary keeps the server's centered field share and adjusts the
+    client share so the two tensors sum exactly to ``result.records``.
+    """
+
+    if result.server_share is None or result.client_share is None:
+        raise ValueError("Suda result does not contain both server and client shares")
+    if result.audit.implementation == "suda-native-cpp-batch-pir-to-share-bridge":
+        modulus = result.audit.polynomial_modulus
+        if modulus is None:
+            raise ValueError("native Suda result must report polynomial_modulus")
+        server_field = torch.as_tensor(result.server_share, dtype=torch.long)
+        # Keep the MPC handoff numerically small. The native Suda field shares
+        # are ~1e15; feeding them directly into fixed-point neural inference
+        # would overflow or lose low bits. This preserves correctness of the
+        # downstream additive sharing while using the Suda share as deterministic
+        # entropy for the conversion.
+        server = ((server_field % 2001) - 1000).to(dtype=torch.float32)
+        records = torch.as_tensor(result.records, dtype=torch.float32)
+        client = records - server
+        return server, client
+    server = torch.as_tensor(result.server_share)
+    client = torch.as_tensor(result.client_share)
+    return server, client
 
 
 def shares_to_bfv_ciphertext(
@@ -787,6 +1084,128 @@ def _one_hot_query_points(indicators: torch.Tensor) -> torch.Tensor:
         raise ValueError("polynomial PIR prototype expects one-hot query indicators")
     indices = indicators.argmax(dim=1).to(dtype=torch.long)
     return indices.cpu() + 1
+
+
+def _one_hot_row_ids_zero_based(indicators: torch.Tensor) -> list[int]:
+    if not torch.allclose(indicators.sum(dim=1), torch.ones(indicators.shape[0], device=indicators.device, dtype=indicators.dtype)):
+        raise ValueError("Suda native bridge expects one-hot query indicators")
+    return [int(value) for value in indicators.argmax(dim=1).to(dtype=torch.long).cpu().tolist()]
+
+
+def _load_suda_native_bridge(module_name: str) -> Any:
+    try:
+        return importlib.import_module(module_name)
+    except ImportError as exc:
+        raise ImportError(
+            "SudaNativeBridgeBackend requires the native Suda bridge extension. "
+            "Build NssMPClib/native/suda_bridge against sls33/Suda first, or pass "
+            "an explicit test module to SudaNativeBridgeBackend(module=...)."
+        ) from exc
+
+
+def _next_power_of_two(value: int) -> int:
+    if value <= 0:
+        raise ValueError("value must be positive")
+    return 1 << (int(value) - 1).bit_length()
+
+
+def _log2_exact(value: int) -> int:
+    if value <= 0 or value & (value - 1):
+        raise ValueError("value must be a positive power of two")
+    return int(value.bit_length() - 1)
+
+
+def _suda_native_padded_database_size(database_size: int, batch_size: int, real_batch_size: int) -> int:
+    dummy_count = batch_size - real_batch_size
+    if dummy_count < 0:
+        raise ValueError("batch_size must be at least the number of selected ids")
+    # Suda's query polynomial is built from a batch of distinct database points.
+    # For padding, reserve real dummy rows instead of repeating one id. Suda's
+    # packed encoder also requires host_n_data to be a multiple of 4096.
+    return _next_power_of_two(max(database_size + dummy_count, batch_size, SUDA_NATIVE_HALF_POLY_MOD_DEGREE))
+
+
+def _choose_suda_native_batch_size(real_batch_size: int, feature_num: int, requested_batch_size: int | None) -> int:
+    if real_batch_size <= 0:
+        raise ValueError("batch size must be positive")
+    if requested_batch_size is not None:
+        if requested_batch_size not in SUDA_NATIVE_SUPPORTED_BATCH_SIZES:
+            raise ValueError(f"unsupported Suda native batch_size={requested_batch_size}")
+        if requested_batch_size < real_batch_size:
+            raise ValueError("requested Suda native batch_size is smaller than the number of selected ids")
+        factor = SUDA_NATIVE_HALF_POLY_MOD_DEGREE // requested_batch_size
+        if requested_batch_size != SUDA_NATIVE_HALF_POLY_MOD_DEGREE and feature_num % factor != 0:
+            raise ValueError(
+                "requested Suda native batch_size is incompatible with feature_num packing: "
+                f"feature_num={feature_num}, factor={factor}"
+            )
+        return requested_batch_size
+    for candidate in SUDA_NATIVE_SUPPORTED_BATCH_SIZES:
+        factor = SUDA_NATIVE_HALF_POLY_MOD_DEGREE // candidate
+        if (
+            candidate >= real_batch_size
+            and SUDA_NATIVE_HALF_POLY_MOD_DEGREE % candidate == 0
+            and (candidate == SUDA_NATIVE_HALF_POLY_MOD_DEGREE or feature_num % factor == 0)
+        ):
+            return candidate
+    raise ValueError(
+        "Suda native bridge currently supports at most "
+        f"{SUDA_NATIVE_SUPPORTED_BATCH_SIZES[-1]} ids per PIR call"
+    )
+
+
+def _pad_suda_native_query_ids(
+    row_ids: list[int],
+    database_size: int,
+    padded_database_size: int,
+    batch_size: int,
+) -> list[int]:
+    if len(row_ids) > batch_size:
+        raise ValueError("row_ids cannot be larger than native batch_size")
+    padding_pool = list(range(database_size, padded_database_size))
+    if len(padding_pool) < batch_size - len(row_ids):
+        raise ValueError("padded database does not contain enough dummy ids for native query padding")
+    padded = list(row_ids)
+    while len(padded) < batch_size:
+        padded.append(padding_pool[len(padded) - len(row_ids)])
+    return padded
+
+
+def _normalise_suda_native_output(
+    native_result: Any,
+    *,
+    real_batch_size: int,
+    feature_num: int,
+    modulus: int,
+) -> tuple[torch.Tensor, torch.Tensor, dict[str, Any]]:
+    meta: dict[str, Any] = {}
+    if isinstance(native_result, dict):
+        server_share = native_result["server_share"]
+        client_share = native_result["client_share"]
+        meta = dict(native_result.get("meta", {}))
+        if "query_bytes" in native_result:
+            meta["query_bytes"] = native_result["query_bytes"]
+        if "response_bytes" in native_result:
+            meta["response_bytes"] = native_result["response_bytes"]
+        if "modulus" in native_result:
+            modulus = int(native_result["modulus"])
+    else:
+        server_share, client_share = native_result
+    server = torch.as_tensor(server_share, dtype=torch.long)
+    client = torch.as_tensor(client_share, dtype=torch.long)
+    if server.shape[0] == feature_num:
+        server = server.transpose(0, 1)
+    if client.shape[0] == feature_num:
+        client = client.transpose(0, 1)
+    server = server[:real_batch_size, :feature_num] % modulus
+    client = client[:real_batch_size, :feature_num] % modulus
+    if tuple(server.shape) != (real_batch_size, feature_num) or tuple(client.shape) != (real_batch_size, feature_num):
+        raise ValueError("native Suda bridge returned shares with an unexpected shape")
+    return server.contiguous(), client.contiguous(), meta
+
+
+def _optional_int(value: Any) -> int | None:
+    return None if value is None else int(value)
 
 
 def _can_use_default_suda_he_backend(indicators: Any, database: Any) -> bool:

@@ -12,6 +12,13 @@ available secret-sharing backend when scores are ``ArithmeticSecretSharing``.
 from __future__ import annotations
 
 from dataclasses import dataclass
+import os
+from pathlib import Path
+import re
+import subprocess
+import tempfile
+import threading
+import time
 from typing import Any
 
 import torch
@@ -52,12 +59,21 @@ class SecureTopKAudit:
     paper_backend: str = "SS bin selection + GC exact top-k"
     paper_backend_available: bool = False
     backend_gap: str = "exact top-k uses ASS comparisons instead of Panther GC backend"
+    gc_binary: str | None = None
+    gc_value_bits: int | None = None
+    gc_port: int | None = None
+    gc_communication_bytes: int | None = None
+    topk_ids_owner: str = "public"
 
 
 @dataclass(frozen=True)
 class SecureTopKResult:
     indicators: Any
     audit: SecureTopKAudit
+
+
+_PANTHER_GC_COUNTER_BY_PARTY: dict[int, int] = {}
+_PANTHER_GC_COUNTER_LOCK = threading.Lock()
 
 
 def secure_top_k_indicators(
@@ -81,6 +97,13 @@ def secure_top_k_indicators(
     num_items = int(scores.shape[-1])
     if k > num_items:
         raise ValueError("k cannot exceed the number of scores")
+
+    if _is_ass(scores) and _panther_gc_topk_enabled():
+        try:
+            return _panther_gc_top_k_indicators(scores, k, return_audit=return_audit)
+        except (FileNotFoundError, RuntimeError, subprocess.SubprocessError):
+            if os.environ.get("PISCES_USE_PANTHER_GC_TOPK") == "1":
+                raise
 
     score_items, indicator_items, backend = _make_items(scores)
     pairs = list(zip(score_items, indicator_items))
@@ -335,6 +358,141 @@ def _public_one_hot_ass_indicators(num_items: int) -> list[Any]:
     if _runtime_party_id() not in (None, 0):
         public_ring = RingTensor.zeros_like(public_ring)
     return [ArithmeticSecretSharing(public_ring[index]) for index in range(num_items)]
+
+
+def _panther_gc_topk_enabled() -> bool:
+    if os.environ.get("PISCES_DISABLE_PANTHER_GC_TOPK") == "1":
+        return False
+    if os.environ.get("PISCES_USE_PANTHER_GC_TOPK") == "1":
+        return True
+    return Path(_panther_gc_topk_binary()).exists()
+
+
+def _panther_gc_topk_binary() -> str:
+    return os.environ.get(
+        "PANTHER_GC_TOPK_BIN",
+        "/tmp/OpenPanther/bazel-bin/experimental/panther/pisces_gc_topk_cli",
+    )
+
+
+def _panther_gc_top_k_indicators(scores: Any, k: int, *, return_audit: bool) -> Any | SecureTopKResult:
+    party_id = _runtime_party_id()
+    if party_id not in (0, 1):
+        raise RuntimeError("OpenPanther GC top-k requires a two-party NssMPClib runtime")
+    binary = _panther_gc_topk_binary()
+    if not Path(binary).exists():
+        raise FileNotFoundError(binary)
+
+    flat = scores.reshape(-1)
+    num_items = int(flat.shape[-1])
+    value_bits = int(os.environ.get("PANTHER_GC_TOPK_VALUE_BITS", "31"))
+    if not 2 <= value_bits <= 31:
+        raise ValueError("PANTHER_GC_TOPK_VALUE_BITS must be in [2, 31]")
+    id_bits = max(1, (num_items - 1).bit_length())
+    score_upper_bound = float(os.environ.get("PANTHER_GC_TOPK_SCORE_UPPER_BOUND", "10000"))
+    offset = int(round(score_upper_bound * int(flat.scale)))
+    if offset <= 0 or offset >= (1 << (value_bits - 1)):
+        raise ValueError("PANTHER_GC_TOPK_SCORE_UPPER_BOUND is outside the GC signed range")
+
+    raw_share = flat.item.tensor.detach().cpu().reshape(-1)
+    mask = (1 << value_bits) - 1
+    if party_id == 0:
+        distance_share = [((offset - int(value)) & mask) for value in raw_share.tolist()]
+    else:
+        distance_share = [((-int(value)) & mask) for value in raw_share.tolist()]
+
+    counter = _next_panther_gc_counter(party_id)
+    port = int(os.environ.get("PANTHER_GC_TOPK_PORT_BASE", "19000")) + counter
+    bin_count = _panther_k_prime(num_items, k)
+    emp_party = party_id + 1
+    prefix = f"pisces_gc_topk_{os.getpid()}_{counter}_{party_id}_"
+    timeout = float(os.environ.get("PANTHER_GC_TOPK_TIMEOUT", "120"))
+
+    with tempfile.TemporaryDirectory(prefix=prefix) as tmpdir:
+        input_path = Path(tmpdir) / "input.txt"
+        output_path = Path(tmpdir) / "output.txt"
+        input_path.write_text("\n".join(str(value) for value in distance_share) + "\n", encoding="ascii")
+        if emp_party == 2:
+            time.sleep(float(os.environ.get("PANTHER_GC_TOPK_CLIENT_DELAY", "0.2")))
+        completed = subprocess.run(
+            [
+                binary,
+                str(emp_party),
+                str(port),
+                str(k),
+                str(value_bits),
+                str(id_bits),
+                str(input_path),
+                str(output_path),
+                str(bin_count),
+            ],
+            check=False,
+            capture_output=True,
+            text=True,
+            timeout=timeout,
+        )
+        if completed.returncode != 0:
+            raise RuntimeError(
+                "OpenPanther GC top-k failed: "
+                + (completed.stderr.strip() or completed.stdout.strip() or f"exit {completed.returncode}")
+            )
+        ids = [int(line.strip()) for line in output_path.read_text(encoding="ascii").splitlines() if line.strip()]
+
+    if party_id == 0:
+        ids = []
+    elif len(ids) != k or any(index < 0 or index >= num_items for index in ids):
+        raise RuntimeError(f"OpenPanther GC top-k returned invalid ids: {ids}")
+
+    indicators = _client_owned_ass_indicators_from_ids(ids, k, num_items)
+    communication_bytes = _parse_gc_communication_bytes(completed.stderr)
+    exact_comparisons = num_items * k
+    audit = SecureTopKAudit(
+        num_items,
+        k,
+        exact_comparisons,
+        exact_comparisons,
+        (k, num_items),
+        "arithmetic_secret_sharing",
+        "openpanther-gc-approx-topk",
+        padded_width=k,
+        padded_items=num_items,
+        k_prime=bin_count,
+        delta=PANTHER_APPROX_DELTA,
+        bin_count=bin_count,
+        max_bin_size=(num_items + bin_count - 1) // bin_count,
+        bin_comparisons=max(0, num_items - bin_count),
+        exact_comparisons=exact_comparisons,
+        paper_backend="OpenPanther EMP GC Approximate_topk",
+        paper_backend_available=True,
+        backend_gap="score-to-distance conversion is done as a public affine transform on the two local shares",
+        gc_binary=binary,
+        gc_value_bits=value_bits,
+        gc_port=port,
+        gc_communication_bytes=communication_bytes,
+        topk_ids_owner="client",
+    )
+    return SecureTopKResult(indicators, audit) if return_audit else indicators
+
+
+def _next_panther_gc_counter(party_id: int) -> int:
+    with _PANTHER_GC_COUNTER_LOCK:
+        counter = _PANTHER_GC_COUNTER_BY_PARTY.get(party_id, 0)
+        _PANTHER_GC_COUNTER_BY_PARTY[party_id] = counter + 1
+    return counter
+
+
+def _client_owned_ass_indicators_from_ids(ids: list[int], k: int, num_items: int) -> Any:
+    plain = torch.zeros((k, num_items), device=DEVICE, dtype=torch.float32)
+    if _runtime_party_id() == 1:
+        for row, index in enumerate(ids):
+            plain[row, index] = 1.0
+    public_ring = RingTensor.convert_to_ring(plain)
+    return ArithmeticSecretSharing(public_ring)
+
+
+def _parse_gc_communication_bytes(stderr: str) -> int | None:
+    match = re.search(r"communication_bytes=(\d+)", stderr)
+    return int(match.group(1)) if match else None
 
 
 def _panther_network_comparisons(num_items: int, k: int) -> int:
