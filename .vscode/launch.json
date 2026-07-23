@@ -2,59 +2,25 @@
     "version": "0.2.0",
     "configurations": [
         {
-            "name": "RAG demo",
+            "name": "Pisces E2E - SQuAD 32 q=8 smoke",
             "type": "python",
             "request": "launch",
-            "program": "${workspaceFolder}/NssMPClib/test/rag.py",
+            "program": "${workspaceFolder}/NssMPClib/test/pisces_e2e.py",
             "console": "integratedTerminal",
             "justMyCode": false,
-            "env": {
-                "PYTHONPATH": "${workspaceFolder}/NssMPClib"
-            }
-        },
-        {
-            "name": "Pisces end-to-end functional demo",
-            "type": "python",
-            "request": "launch",
-            "program": "${workspaceFolder}/NssMPClib/test/pisces_end_to_end.py",
-            "console": "integratedTerminal",
-            "justMyCode": false,
-            "env": {
-                "PYTHONPATH": "${workspaceFolder}/NssMPClib",
-                "PYTHONUNBUFFERED": "1"
-            }
-        },
-        {
-            "name": "Pisces real dataset eval - Hotpot smoke",
-            "type": "python",
-            "request": "launch",
-            "program": "${workspaceFolder}/NssMPClib/test/pisces_real_dataset_eval.py",
-            "console": "integratedTerminal",
-            "justMyCode": false,
-            "args": [
-                "--limit-queries",
-                "3",
-                "--corpus-limit",
-                "200",
-                "--protocol-docs",
-                "200",
-                "--top-k",
-                "5",
-                "--verbose-queries",
-                "3",
-                "--device",
-                "cuda",
-                "--setup-mode",
-                "offline",
-                "--setup-cache-dir",
-                "${workspaceFolder}/data/pisces_setup_cache",
-                "--report-jsonl",
-                "${workspaceFolder}/data/pisces_reports/hotpot_smoke.jsonl",
-                "--resume-report"
-            ],
             "env": {
                 "PYTHONPATH": "${workspaceFolder}/NssMPClib",
                 "PYTHONUNBUFFERED": "1",
+                "SKIP_GEN_PARAMS": "1",
+                "PISCES_RAG_PROFILE": "squad_dev_q8",
+                "PISCES_RAG_NUM_DOCS": "32",
+                "PISCES_RAG_TOP_K": "1",
+                "PISCES_RAG_DOC_LEN": "8",
+                "PISCES_RAG_P3_PAILLIER_KEY_SIZE": "64",
+                "PISCES_RAG_PROTOCOL_AUDIT": "0",
+                "PANTHER_GC_TOPK_BIN": "/home/adslab/.cache/bazel/_bazel_adslab/a040aef45150591ddf93d4a48f198522/execroot/spulib/bazel-out/k8-opt/bin/experimental/panther/pisces_gc_topk_cli",
+                "LD_LIBRARY_PATH": "/tmp/pisces_native_deps/root/usr/lib/x86_64-linux-gnu:${env:LD_LIBRARY_PATH}",
+                "PISCES_RAG_REPORT_JSON": "${workspaceFolder}/data/pisces_reports/e2e_squad_32_q8_smoke.json",
                 "DEVICE": "cuda",
                 "HTTP_PROXY": "http://10.122.245.238:10808",
                 "HTTPS_PROXY": "http://10.122.245.238:10808",
@@ -62,38 +28,25 @@
             }
         },
         {
-            "name": "Pisces real dataset eval - SQuAD dev smoke",
+            "name": "Pisces E2E - SQuAD 1204 q=8 top10",
             "type": "python",
             "request": "launch",
-            "program": "${workspaceFolder}/NssMPClib/test/pisces_real_dataset_eval.py",
+            "program": "${workspaceFolder}/NssMPClib/test/pisces_e2e.py",
             "console": "integratedTerminal",
             "justMyCode": false,
-            "args": [
-                "--dataset",
-                "squad_dev_v2",
-                "--limit-queries",
-                "3",
-                "--corpus-limit",
-                "80",
-                "--protocol-docs",
-                "80",
-                "--top-k",
-                "5",
-                "--verbose-queries",
-                "1",
-                "--device",
-                "cuda",
-                "--setup-mode",
-                "offline",
-                "--setup-cache-dir",
-                "${workspaceFolder}/data/pisces_setup_cache",
-                "--report-jsonl",
-                "${workspaceFolder}/data/pisces_reports/squad_dev_smoke.jsonl",
-                "--resume-report"
-            ],
             "env": {
                 "PYTHONPATH": "${workspaceFolder}/NssMPClib",
                 "PYTHONUNBUFFERED": "1",
+                "SKIP_GEN_PARAMS": "1",
+                "PISCES_RAG_PROFILE": "squad_dev_q8",
+                "PISCES_RAG_NUM_DOCS": "1204",
+                "PISCES_RAG_TOP_K": "10",
+                "PISCES_RAG_DOC_LEN": "8",
+                "PISCES_RAG_P3_PAILLIER_KEY_SIZE": "64",
+                "PISCES_RAG_PROTOCOL_AUDIT": "0",
+                "PANTHER_GC_TOPK_BIN": "/home/adslab/.cache/bazel/_bazel_adslab/a040aef45150591ddf93d4a48f198522/execroot/spulib/bazel-out/k8-opt/bin/experimental/panther/pisces_gc_topk_cli",
+                "LD_LIBRARY_PATH": "/tmp/pisces_native_deps/root/usr/lib/x86_64-linux-gnu:${env:LD_LIBRARY_PATH}",
+                "PISCES_RAG_REPORT_JSON": "${workspaceFolder}/data/pisces_reports/e2e_squad_1204_q8_top10.json",
                 "DEVICE": "cuda",
                 "HTTP_PROXY": "http://10.122.245.238:10808",
                 "HTTPS_PROXY": "http://10.122.245.238:10808",
@@ -101,210 +54,112 @@
             }
         },
         {
-            "name": "Pisces Protocol 4 audit",
+            "name": "Pisces Batch - SQuAD 1204 q=8 top10 100q retrieval",
             "type": "python",
             "request": "launch",
-            "program": "${workspaceFolder}/NssMPClib/test/test_pisces_protocol4.py",
-            "console": "integratedTerminal",
-            "justMyCode": false,
-            "env": {
-                "PYTHONPATH": "${workspaceFolder}/NssMPClib"
-            }
-        },
-        {
-            "name": "Pisces Protocol 3 audit",
-            "type": "python",
-            "request": "launch",
-            "program": "${workspaceFolder}/NssMPClib/test/test_pisces_protocol3.py",
-            "console": "integratedTerminal",
-            "justMyCode": false,
-            "env": {
-                "PYTHONPATH": "${workspaceFolder}/NssMPClib",
-                "PYTHONUNBUFFERED": "1"
-            }
-        },
-        {
-            "name": "Pisces Protocol 2 audit",
-            "type": "python",
-            "request": "launch",
-            "program": "${workspaceFolder}/NssMPClib/test/test_pisces_protocol2.py",
-            "console": "integratedTerminal",
-            "justMyCode": false,
-            "env": {
-                "PYTHONPATH": "${workspaceFolder}/NssMPClib",
-                "PYTHONUNBUFFERED": "1"
-            }
-        },
-        {
-            "name": "Pisces Protocol 1 audit",
-            "type": "python",
-            "request": "launch",
-            "program": "${workspaceFolder}/NssMPClib/test/test_pisces_protocol1.py",
-            "console": "integratedTerminal",
-            "justMyCode": false,
-            "env": {
-                "PYTHONPATH": "${workspaceFolder}/NssMPClib",
-                "PYTHONUNBUFFERED": "1"
-            }
-        },
-        {
-            "name": "Pisces PIR audit",
-            "type": "python",
-            "request": "launch",
-            "program": "${workspaceFolder}/NssMPClib/test/test_pisces_pir.py",
-            "console": "integratedTerminal",
-            "justMyCode": false,
-            "env": {
-                "PYTHONPATH": "${workspaceFolder}/NssMPClib",
-                "PYTHONUNBUFFERED": "1"
-            }
-        },
-        {
-            "name": "Pisces Protocol 2/3/4 ciphertext audit",
-            "type": "python",
-            "request": "launch",
-            "program": "${workspaceFolder}/NssMPClib/test/test_pisces_protocol234_audit.py",
-            "console": "integratedTerminal",
-            "justMyCode": false,
-            "env": {
-                "PYTHONPATH": "${workspaceFolder}/NssMPClib",
-                "PYTHONUNBUFFERED": "1"
-            }
-        },
-        {
-            "name": "Pisces secure sorting plain",
-            "type": "python",
-            "request": "launch",
-            "program": "${workspaceFolder}/NssMPClib/test/test_pisces_secure_sorting.py",
-            "console": "integratedTerminal",
-            "justMyCode": false,
-            "env": {
-                "PYTHONPATH": "${workspaceFolder}/NssMPClib",
-                "PYTHONUNBUFFERED": "1"
-            }
-        },
-        {
-            "name": "Pisces secure sorting ASS runtime",
-            "type": "python",
-            "request": "launch",
-            "program": "${workspaceFolder}/NssMPClib/test/test_pisces_secure_sorting_ass.py",
+            "program": "${workspaceFolder}/NssMPClib/test/pisces_e2e.py",
             "console": "integratedTerminal",
             "justMyCode": false,
             "env": {
                 "PYTHONPATH": "${workspaceFolder}/NssMPClib",
                 "PYTHONUNBUFFERED": "1",
-                "DEVICE": "cpu"
+                "SKIP_GEN_PARAMS": "1",
+                "PISCES_RAG_PROFILE": "squad_dev_q8",
+                "PISCES_RAG_NUM_DOCS": "1204",
+                "PISCES_RAG_TOP_K": "10",
+                "PISCES_RAG_DOC_LEN": "8",
+                "PISCES_RAG_QUERY_COUNT": "100",
+                "PISCES_RAG_P3_PAILLIER_KEY_SIZE": "64",
+                "PISCES_RAG_PROTOCOL_AUDIT": "0",
+                "PANTHER_GC_TOPK_BIN": "/home/adslab/.cache/bazel/_bazel_adslab/a040aef45150591ddf93d4a48f198522/execroot/spulib/bazel-out/k8-opt/bin/experimental/panther/pisces_gc_topk_cli",
+                "LD_LIBRARY_PATH": "/tmp/pisces_native_deps/root/usr/lib/x86_64-linux-gnu:${env:LD_LIBRARY_PATH}",
+                "PISCES_RAG_REPORT_JSON": "${workspaceFolder}/data/pisces_reports/batch_squad_1204_q8_top10_100q_retrieval.json",
+                "DEVICE": "cuda",
+                "HTTP_PROXY": "http://10.122.245.238:10808",
+                "HTTPS_PROXY": "http://10.122.245.238:10808",
+                "ALL_PROXY": "socks5://10.122.245.238:10808"
             }
         },
         {
-            "name": "Pisces paper benchmark quick",
+            "name": "Pisces Params - SQuAD 1204 q=8 top10 1000q CPU",
             "type": "python",
             "request": "launch",
-            "program": "${workspaceFolder}/NssMPClib/test/test_pisces_paper_benchmark.py",
+            "program": "${workspaceFolder}/NssMPClib/test/pisces_e2e.py",
             "console": "integratedTerminal",
             "justMyCode": false,
             "env": {
                 "PYTHONPATH": "${workspaceFolder}/NssMPClib",
                 "PYTHONUNBUFFERED": "1",
-                "PISCES_BENCH_PROFILE": "quick",
-                "PISCES_BENCH_P1": "1"
+                "SKIP_GEN_PARAMS": "1",
+                "PISCES_RAG_PARAMS_ONLY": "1",
+                "PISCES_RAG_PROFILE": "squad_dev_q8",
+                "PISCES_RAG_NUM_DOCS": "1204",
+                "PISCES_RAG_TOP_K": "10",
+                "PISCES_RAG_DOC_LEN": "8",
+                "PISCES_RAG_QUERY_COUNT": "1000",
+                "PISCES_RAG_P3_PAILLIER_KEY_SIZE": "64",
+                "PISCES_RAG_PROTOCOL_AUDIT": "0",
+                "PANTHER_GC_TOPK_BIN": "/home/adslab/.cache/bazel/_bazel_adslab/a040aef45150591ddf93d4a48f198522/execroot/spulib/bazel-out/k8-opt/bin/experimental/panther/pisces_gc_topk_cli",
+                "LD_LIBRARY_PATH": "/tmp/pisces_native_deps/root/usr/lib/x86_64-linux-gnu:${env:LD_LIBRARY_PATH}",
+                "PISCES_RAG_REPORT_JSON": "${workspaceFolder}/data/pisces_reports/params_squad_1204_q8_top10_1000q.json",
+                "DEVICE": "cpu",
+                "HTTP_PROXY": "http://10.122.245.238:10808",
+                "HTTPS_PROXY": "http://10.122.245.238:10808",
+                "ALL_PROXY": "socks5://10.122.245.238:10808"
             }
         },
         {
-            "name": "Pisces Protocol 4 comm",
+            "name": "Pisces Batch - SQuAD 1204 q=8 top10 1000q retrieval",
             "type": "python",
             "request": "launch",
-            "program": "${workspaceFolder}/NssMPClib/test/test_pisces_protocol4_comm.py",
-            "console": "integratedTerminal",
-            "justMyCode": false,
-            "env": {
-                "PYTHONPATH": "${workspaceFolder}/NssMPClib"
-            }
-        },
-        {
-            "name": "Pisces Protocol 4 scale",
-            "type": "python",
-            "request": "launch",
-            "program": "${workspaceFolder}/NssMPClib/test/test_pisces_protocol4_scale.py",
-            "console": "integratedTerminal",
-            "justMyCode": false,
-            "env": {
-                "PYTHONPATH": "${workspaceFolder}/NssMPClib",
-                "PYTHONUNBUFFERED": "1",
-                "PISCES_SCALE_DOCS": "2000",
-                "PISCES_SCALE_VOCAB": "4000",
-                "PISCES_SCALE_TERMS_PER_DOC": "10",
-                "PISCES_SCALE_QUERY_TERMS": "8"
-            }
-        },
-        {
-            "name": "Pisces Protocol 4 scale - SQuAD q=1",
-            "type": "python",
-            "request": "launch",
-            "program": "${workspaceFolder}/NssMPClib/test/test_pisces_protocol4_scale.py",
+            "program": "${workspaceFolder}/NssMPClib/test/pisces_e2e.py",
             "console": "integratedTerminal",
             "justMyCode": false,
             "env": {
                 "PYTHONPATH": "${workspaceFolder}/NssMPClib",
                 "PYTHONUNBUFFERED": "1",
-                "PISCES_SCALE_DOCS": "19029",
-                "PISCES_SCALE_VOCAB": "1000",
-                "PISCES_SCALE_TERMS_PER_DOC": "25",
-                "PISCES_SCALE_QUERY_TERMS": "1"
+                "SKIP_GEN_PARAMS": "1",
+                "PISCES_RAG_PROFILE": "squad_dev_q8",
+                "PISCES_RAG_NUM_DOCS": "1204",
+                "PISCES_RAG_TOP_K": "10",
+                "PISCES_RAG_DOC_LEN": "8",
+                "PISCES_RAG_QUERY_COUNT": "1000",
+                "PISCES_RAG_P3_PAILLIER_KEY_SIZE": "64",
+                "PISCES_RAG_PROTOCOL_AUDIT": "0",
+                "PANTHER_GC_TOPK_BIN": "/home/adslab/.cache/bazel/_bazel_adslab/a040aef45150591ddf93d4a48f198522/execroot/spulib/bazel-out/k8-opt/bin/experimental/panther/pisces_gc_topk_cli",
+                "LD_LIBRARY_PATH": "/tmp/pisces_native_deps/root/usr/lib/x86_64-linux-gnu:${env:LD_LIBRARY_PATH}",
+                "PISCES_RAG_REPORT_JSON": "${workspaceFolder}/data/pisces_reports/batch_squad_1204_q8_top10_1000q_retrieval.json",
+                "DEVICE": "cuda",
+                "HTTP_PROXY": "http://10.122.245.238:10808",
+                "HTTPS_PROXY": "http://10.122.245.238:10808",
+                "ALL_PROXY": "socks5://10.122.245.238:10808"
             }
         },
         {
-            "name": "Pisces Protocol 4 scale - SQuAD q=8",
+            "name": "Pisces E2E - SQuAD 32 q=8 P3=160",
             "type": "python",
             "request": "launch",
-            "program": "${workspaceFolder}/NssMPClib/test/test_pisces_protocol4_scale.py",
+            "program": "${workspaceFolder}/NssMPClib/test/pisces_e2e.py",
             "console": "integratedTerminal",
             "justMyCode": false,
             "env": {
                 "PYTHONPATH": "${workspaceFolder}/NssMPClib",
                 "PYTHONUNBUFFERED": "1",
-                "PISCES_SCALE_DOCS": "19029",
-                "PISCES_SCALE_VOCAB": "1000",
-                "PISCES_SCALE_TERMS_PER_DOC": "25",
-                "PISCES_SCALE_QUERY_TERMS": "8"
-            }
-        },
-        {
-            "name": "Pisces Protocol 4 scale - Hotpot q=1",
-            "type": "python",
-            "request": "launch",
-            "program": "${workspaceFolder}/NssMPClib/test/test_pisces_protocol4_scale.py",
-            "console": "integratedTerminal",
-            "justMyCode": false,
-            "env": {
-                "PYTHONPATH": "${workspaceFolder}/NssMPClib",
-                "PYTHONUNBUFFERED": "1",
-                "PISCES_SCALE_DOCS": "269602",
-                "PISCES_SCALE_VOCAB": "1000",
-                "PISCES_SCALE_TERMS_PER_DOC": "6",
-                "PISCES_SCALE_QUERY_TERMS": "1"
-            }
-        },
-        {
-            "name": "Current Python file",
-            "type": "python",
-            "request": "launch",
-            "program": "${file}",
-            "console": "integratedTerminal",
-            "justMyCode": false,
-            "env": {
-                "PYTHONPATH": "${workspaceFolder}/NssMPClib"
-            }
-        },
-        {
-            "name": "BERT",
-            "type": "python",
-            "request": "launch",
-            "program": "${workspaceFolder}/NssMPClib/test/test_mha.py",
-            "console": "integratedTerminal",
-            "justMyCode": true,
-            "env": {
-                "PYTHONPATH": "${workspaceFolder}/NssMPClib"
+                "SKIP_GEN_PARAMS": "1",
+                "PISCES_RAG_PROFILE": "squad_dev_q8",
+                "PISCES_RAG_NUM_DOCS": "32",
+                "PISCES_RAG_TOP_K": "1",
+                "PISCES_RAG_DOC_LEN": "8",
+                "PISCES_RAG_P3_PAILLIER_KEY_SIZE": "64",
+                "PISCES_RAG_P3_PROJECTIONS": "160",
+                "PISCES_RAG_PROTOCOL_AUDIT": "0",
+                "PANTHER_GC_TOPK_BIN": "/home/adslab/.cache/bazel/_bazel_adslab/a040aef45150591ddf93d4a48f198522/execroot/spulib/bazel-out/k8-opt/bin/experimental/panther/pisces_gc_topk_cli",
+                "LD_LIBRARY_PATH": "/tmp/pisces_native_deps/root/usr/lib/x86_64-linux-gnu:${env:LD_LIBRARY_PATH}",
+                "PISCES_RAG_REPORT_JSON": "${workspaceFolder}/data/pisces_reports/e2e_squad_32_q8_p3_160.json",
+                "DEVICE": "cuda",
+                "HTTP_PROXY": "http://10.122.245.238:10808",
+                "HTTPS_PROXY": "http://10.122.245.238:10808",
+                "ALL_PROXY": "socks5://10.122.245.238:10808"
             }
         }
     ]

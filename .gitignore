@@ -1,0 +1,9 @@
+__pycache__/
+*.py[cod]
+
+build/
+
+data/pisces_reports/
+data/pisces_setup_cache/
+data/squad/
+

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from functools import lru_cache
 import hashlib
 import hmac
 import os
@@ -10,7 +11,7 @@ from typing import Iterable, Protocol
 
 import torch
 
-from NssMPC.crypto.primitives.okvs import BinaryOKVS, OKVSTable, xor_bytes
+from NssMPC.crypto.primitives.okvs import BinaryOKVS, OKVSTable
 
 
 class OPRFClient(Protocol):
@@ -44,10 +45,7 @@ class AESCTRLabelCipher:
     """
 
     def encrypt(self, key: bytes, plaintext: bytes) -> bytes:
-        try:
-            from cryptography.hazmat.primitives.ciphers import Cipher, algorithms, modes
-        except ImportError as exc:
-            raise RuntimeError("cryptography is required for AES label encryption") from exc
+        Cipher, algorithms, modes = _aes_ctr_classes()
 
         aes_key = key[:32]
         nonce = kdf(b"pisces-aes-ctr-nonce", key, size=16)
@@ -58,26 +56,16 @@ class AESCTRLabelCipher:
         return self.encrypt(key, ciphertext)
 
 
-@dataclass
-class HMACStreamLabelCipher:
-    """Non-AES fallback kept for isolated tests where AES is unavailable."""
-
-    def encrypt(self, key: bytes, plaintext: bytes) -> bytes:
-        return xor_bytes(plaintext, self._keystream(key, len(plaintext)))
-
-    def decrypt(self, key: bytes, ciphertext: bytes) -> bytes:
-        return self.encrypt(key, ciphertext)
-
-    def _keystream(self, key: bytes, size: int) -> bytes:
-        blocks = []
-        counter = 0
-        while sum(len(block) for block in blocks) < size:
-            blocks.append(hmac.new(key, counter.to_bytes(8, "big"), hashlib.sha256).digest())
-            counter += 1
-        return b"".join(blocks)[:size]
-
-
 LabelCipher = AESCTRLabelCipher
+
+
+@lru_cache(maxsize=1)
+def _aes_ctr_classes():
+    try:
+        from cryptography.hazmat.primitives.ciphers import Cipher, algorithms, modes
+    except ImportError as exc:
+        raise RuntimeError("cryptography is required for AES label encryption") from exc
+    return Cipher, algorithms, modes
 
 
 def encode_item(item: int | str | bytes) -> bytes:

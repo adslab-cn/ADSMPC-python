@@ -16,6 +16,7 @@ setup(
     include_package_data=True,
     install_requires=[
         "cryptography>=48.0.1",
+        "gmpy2>=2.3.1",
         f'torchcsprng @ file://localhost/{path}/csprng',
     ],
 )

@@ -1,39 +1,26 @@
-"""Pisces-style private RAG retrieval scaffolding.
-
-This package starts with NssMPClib-native building blocks and deliberately keeps
-the paper-specific protocols behind small interfaces so they can be replaced as
-we port the full Pisces construction.
-"""
+"""Pisces private RAG protocols built on NssMPClib."""
 
 from .config import PiscesConfig
 from .pir import (
-    ShareToHEAudit,
-    ShareToHEResult,
-    SudaBFVPolynomialBackend,
-    SudaEncryptedOPROPEOPIBackend,
-    SudaLFHEPolynomialBackend,
     SudaNativeBridgeBackend,
     SudaNativeClientAnswer,
+    SudaNativePIRClientShare,
+    SudaNativePIRServerShare,
     SudaNativeClientState,
+    SudaNativeServerState,
     SudaNativeServerAnswer,
     SudaPIRToShareAudit,
     SudaPIRToShareResult,
-    decrypt_bfv_ciphertext_to_tensor,
-    SudaPIRToSharePlaintextProtocolBackend,
-    SudaPolynomialPlaintextBackend,
-    encode_database_as_polynomials,
-    evaluate_polynomial_database,
-    evaluate_polynomial_coefficients,
-    shares_to_bfv_ciphertext,
-    suda_result_to_plain_additive_shares,
+    audit_to_message,
+    finite_field_share_to_float_ass,
     suda_native_client_extract,
+    suda_native_make_client_followup_request,
     suda_native_make_client_request,
     suda_native_make_layout,
+    suda_native_make_server_state,
+    suda_native_pir_to_share_client,
+    suda_native_pir_to_share_server,
     suda_native_server_answer,
-    suda_ope_mask_polynomials,
-    suda_opi_interpolate_share_polynomials,
-    suda_opr_reduce_polynomials,
-    suda_pir_to_share,
 )
 from .protocol1 import (
     Protocol1CandidateResult,
@@ -41,6 +28,13 @@ from .protocol1 import (
     Protocol1SemanticResult,
     Protocol1Server,
     protocol1_finish_from_candidate_mask,
+)
+from .protocol2 import (
+    Protocol2BM25Result,
+    Protocol2Client,
+    Protocol2LexicalResult,
+    Protocol2Server,
+    Protocol2WeightedTF,
 )
 from .protocol3 import (
     Protocol3Client,
@@ -57,33 +51,31 @@ from .protocol4 import (
     run_protocol4_server,
 )
 from .psi import OKVSMultiInstanceLabeledPSI
-from .retrieval import PiscesRetriever, RetrievalResult
 from .secure_sorting import SecureTopKAudit, SecureTopKResult, secure_top_k_indicators
 
 __all__ = [
     "OKVSMultiInstanceLabeledPSI",
-    "ShareToHEAudit",
-    "ShareToHEResult",
-    "SudaBFVPolynomialBackend",
-    "SudaEncryptedOPROPEOPIBackend",
-    "SudaLFHEPolynomialBackend",
     "SudaNativeBridgeBackend",
     "SudaNativeClientAnswer",
+    "SudaNativePIRClientShare",
+    "SudaNativePIRServerShare",
     "SudaNativeClientState",
+    "SudaNativeServerState",
     "SudaNativeServerAnswer",
     "SudaPIRToShareAudit",
     "SudaPIRToShareResult",
-    "SudaPIRToSharePlaintextProtocolBackend",
-    "SudaPolynomialPlaintextBackend",
     "PiscesConfig",
-    "PiscesRetriever",
-    "RetrievalResult",
     "SecureTopKAudit",
     "SecureTopKResult",
     "Protocol1CandidateResult",
     "Protocol1Client",
     "Protocol1SemanticResult",
     "Protocol1Server",
+    "Protocol2BM25Result",
+    "Protocol2Client",
+    "Protocol2LexicalResult",
+    "Protocol2Server",
+    "Protocol2WeightedTF",
     "Protocol4Client",
     "Protocol3Client",
     "Protocol3ClientMessage",
@@ -96,18 +88,14 @@ __all__ = [
     "run_protocol4_server",
     "protocol1_finish_from_candidate_mask",
     "secure_top_k_indicators",
-    "decrypt_bfv_ciphertext_to_tensor",
-    "encode_database_as_polynomials",
-    "evaluate_polynomial_database",
-    "evaluate_polynomial_coefficients",
-    "shares_to_bfv_ciphertext",
-    "suda_result_to_plain_additive_shares",
+    "audit_to_message",
+    "finite_field_share_to_float_ass",
     "suda_native_client_extract",
+    "suda_native_make_client_followup_request",
     "suda_native_make_client_request",
     "suda_native_make_layout",
+    "suda_native_make_server_state",
+    "suda_native_pir_to_share_client",
+    "suda_native_pir_to_share_server",
     "suda_native_server_answer",
-    "suda_ope_mask_polynomials",
-    "suda_opi_interpolate_share_polynomials",
-    "suda_opr_reduce_polynomials",
-    "suda_pir_to_share",
 ]

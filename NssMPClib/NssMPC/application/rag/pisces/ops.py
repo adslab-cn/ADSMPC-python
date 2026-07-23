@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+import hashlib
 import math
 from typing import Any
 
@@ -28,16 +29,44 @@ class BM25Computation:
     contributions: torch.Tensor
 
 
-def simhash(vectors: torch.Tensor, projection: torch.Tensor | None = None, bits: int = 128) -> torch.Tensor:
+_SIMHASH_PROJECTION_CACHE: dict[tuple[int, int, str, str], torch.Tensor] = {}
+
+
+def simhash(vectors: torch.Tensor, projection: torch.Tensor | None = None, bits: int = 64) -> torch.Tensor:
     """Convert dense vectors to SimHash bits with a supplied or deterministic projection."""
 
     if vectors.dim() == 1:
         vectors = vectors.unsqueeze(0)
     if projection is None:
-        generator = torch.Generator(device=vectors.device)
-        generator.manual_seed(20260607)
-        projection = torch.randn(vectors.shape[-1], bits, generator=generator, device=vectors.device)
+        projection = _default_simhash_projection(vectors.shape[-1], bits, vectors.device, vectors.dtype)
     return (vectors @ projection >= 0).to(torch.uint8)
+
+
+def _default_simhash_projection(
+    dimensions: int,
+    bits: int,
+    device: torch.device | str,
+    dtype: torch.dtype,
+) -> torch.Tensor:
+    """Deterministic Rademacher projection matching the plaintext Pisces baseline."""
+
+    tensor_dtype = dtype if torch.is_floating_point(torch.empty((), dtype=dtype)) else torch.float32
+    key = (int(dimensions), int(bits), str(device), str(tensor_dtype))
+    cached = _SIMHASH_PROJECTION_CACHE.get(key)
+    if cached is not None:
+        return cached
+
+    values = []
+    for dimension in range(dimensions):
+        row = []
+        for bit_index in range(bits):
+            payload = f"{bit_index}:{dimension}".encode("ascii")
+            digest = hashlib.blake2b(payload, digest_size=1).digest()
+            row.append(1.0 if digest[0] & 1 else -1.0)
+        values.append(row)
+    projection = torch.tensor(values, dtype=tensor_dtype, device=device)
+    _SIMHASH_PROJECTION_CACHE[key] = projection
+    return projection
 
 
 def semantic_inner_product_scores(query_embedding: Any, document_embeddings: Any) -> Any:

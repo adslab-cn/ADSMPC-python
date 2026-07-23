@@ -19,6 +19,11 @@ from NssMPC.application.rag.pisces.ops import simhash
 from NssMPC.crypto.primitives.homomorphic_encryption.paillier import Paillier
 from NssMPC.crypto.primitives.okvs import BinaryOKVS, OKVSTable
 
+try:  # Optional acceleration for Paillier big-integer arithmetic.
+    import gmpy2 as _gmpy2
+except ImportError:  # pragma: no cover - exercised on environments without gmpy2
+    _gmpy2 = None
+
 
 @dataclass(frozen=True)
 class Protocol3Document:
@@ -36,17 +41,17 @@ class Protocol3PublicSetup:
     simhash_bits: int
     threshold: int
     projection_weight: int
-    bucket_capacity: int
     ciphertext_size: int
+    projection_collision_count: int = 0
 
 
 @dataclass(frozen=True)
 class Protocol3ClientState:
-    decoded_buckets: tuple[tuple[int, ...], ...]
+    decoded_projection_ciphertexts: tuple[int, ...]
 
     @property
     def decoded_ciphertexts(self) -> tuple[int, ...]:
-        return tuple(ciphertext for bucket in self.decoded_buckets for ciphertext in bucket)
+        return self.decoded_projection_ciphertexts
 
 
 @dataclass(frozen=True)
@@ -112,7 +117,6 @@ class Protocol3Server:
         seed: bytes = b"pisces-protocol3",
         projection: torch.Tensor | None = None,
         simhash_bits: int = 128,
-        bucket_capacity: int | None = None,
     ) -> None:
         self.okvs = okvs or BinaryOKVS(expansion=2.4)
         self.he = he or AdditivePaillier()
@@ -121,7 +125,6 @@ class Protocol3Server:
         self.seed = seed
         self.projection = projection
         self.simhash_bits = simhash_bits
-        self.bucket_capacity = bucket_capacity
         self.setup: Protocol3PublicSetup | None = None
         self.documents: tuple[Protocol3Document, ...] = ()
         self._secret_to_document: dict[int, Protocol3Document] = {}
@@ -164,7 +167,8 @@ class Protocol3Server:
             for doc_id in range(num_docs)
         )
 
-        bucket_entries: dict[bytes, list[int]] = {}
+        entries: dict[bytes, int] = {}
+        projection_collision_count = 0
         n = self.he.modulus
         n2_size = _int_byte_size(self.he.modulus_squared)
         rng = random.Random(self.seed + b":shamir")
@@ -177,27 +181,19 @@ class Protocol3Server:
                 key = protocol3_projection_key(document.simhash_bits, mask, mask_id=mask_id)
                 share = (coefficient * projection_points[mask_id] + secret) % n
                 ciphertext = self.he.encrypt(share)
-                bucket_entries.setdefault(key, []).append(ciphertext)
+                if key in entries:
+                    projection_collision_count += 1
+                    continue
+                entries[key] = ciphertext
 
-        if not bucket_entries:
+        if not entries:
             raise ValueError("Protocol 3 requires at least one document")
-
-        observed_capacity = max(len(bucket) for bucket in bucket_entries.values())
-        bucket_capacity = self.bucket_capacity or observed_capacity
-        if bucket_capacity < observed_capacity:
-            raise ValueError(
-                f"bucket_capacity={bucket_capacity} is too small for observed Protocol 3 projection bucket size "
-                f"{observed_capacity}"
-            )
 
         keys = []
         values = []
-        for key, bucket in bucket_entries.items():
-            padded_bucket = list(bucket)
-            while len(padded_bucket) < bucket_capacity:
-                padded_bucket.append(self.he.encrypt(_nonzero_mod(n, rng)))
+        for key, ciphertext in entries.items():
             keys.append(key)
-            values.append(_encode_ciphertext_bucket(padded_bucket, n2_size))
+            values.append(_encode_ciphertext(ciphertext, n2_size))
 
         table = self.okvs.encode(keys, values)
         setup = Protocol3PublicSetup(
@@ -208,8 +204,8 @@ class Protocol3Server:
             simhash_bits=bit_length,
             threshold=self.threshold,
             projection_weight=math.ceil(math.sqrt(self.threshold * bit_length)),
-            bucket_capacity=bucket_capacity,
             ciphertext_size=n2_size,
+            projection_collision_count=projection_collision_count,
         )
         self.setup = setup
         self.documents = documents
@@ -252,35 +248,35 @@ class Protocol3Client:
 
         n, _ = setup.public_key
         n2 = n * n
-        decoded_buckets: list[tuple[int, ...]] = []
+        n2_gmp = _gmpy2.mpz(n2) if _gmpy2 is not None else None
+        decoded_ciphertexts: list[int] = []
         query_bit_tuple = tuple(int(bit) for bit in query_bits.reshape(-1).tolist())
         for mask_id, mask in enumerate(setup.masks):
             key = protocol3_projection_key(query_bit_tuple, mask, mask_id=mask_id)
             value = self.okvs.decode(setup.table, key)
-            decoded_buckets.append(
-                _decode_ciphertext_bucket(
-                    value,
-                    ciphertext_size=setup.ciphertext_size,
-                    bucket_capacity=setup.bucket_capacity,
-                    modulus_squared=n2,
-                )
+            decoded_ciphertexts.append(
+                _decode_ciphertext(value, ciphertext_size=setup.ciphertext_size, modulus_squared=n2)
             )
-        self.state = Protocol3ClientState(tuple(decoded_buckets))
+        self.state = Protocol3ClientState(tuple(decoded_ciphertexts))
 
         secret_ciphertexts: list[int] = []
-        for left in range(len(decoded_buckets)):
-            for right in range(left + 1, len(decoded_buckets)):
-                for left_ciphertext in decoded_buckets[left]:
-                    for right_ciphertext in decoded_buckets[right]:
-                        secret_ciphertexts.append(
-                            paillier_interpolate_at_zero(
-                                left_ciphertext,
-                                setup.projection_points[left],
-                                right_ciphertext,
-                                setup.projection_points[right],
-                                setup.public_key,
-                            )
-                    )
+        for left in range(len(decoded_ciphertexts)):
+            left_ciphertext = decoded_ciphertexts[left]
+            left_x = setup.projection_points[left]
+            for right in range(left + 1, len(decoded_ciphertexts)):
+                right_x = setup.projection_points[right]
+                denominator = (right_x - left_x) % n
+                inverse = int(_gmpy2.invert(denominator, n)) if _gmpy2 is not None else pow(denominator, -1, n)
+                left_coeff = (right_x * inverse) % n
+                right_coeff = (-left_x * inverse) % n
+                if _gmpy2 is None:
+                    left_term = pow(left_ciphertext, left_coeff, n2)
+                    right_term = pow(decoded_ciphertexts[right], right_coeff, n2)
+                    secret_ciphertexts.append((left_term * right_term) % n2)
+                else:
+                    left_term = _gmpy2.powmod(left_ciphertext, left_coeff, n2_gmp)
+                    right_term = _gmpy2.powmod(decoded_ciphertexts[right], right_coeff, n2_gmp)
+                    secret_ciphertexts.append(int((left_term * right_term) % n2_gmp))
 
         rng = random.Random(self.shuffle_seed or b"pisces-protocol3-client-shuffle")
         rng.shuffle(secret_ciphertexts)
@@ -375,7 +371,10 @@ def paillier_add(left: int, right: int, public_key: tuple[int, int]) -> int:
 
 def paillier_mul_plain(ciphertext: int, scalar: int, public_key: tuple[int, int]) -> int:
     n = public_key[0]
-    return pow(ciphertext, scalar % n, n * n)
+    n2 = n * n
+    if _gmpy2 is not None:
+        return int(_gmpy2.powmod(ciphertext, scalar % n, n2))
+    return pow(ciphertext, scalar % n, n2)
 
 
 def paillier_interpolate_at_zero(
@@ -387,7 +386,7 @@ def paillier_interpolate_at_zero(
 ) -> int:
     n = public_key[0]
     denominator = (right_x - left_x) % n
-    inverse = pow(denominator, -1, n)
+    inverse = int(_gmpy2.invert(denominator, n)) if _gmpy2 is not None else pow(denominator, -1, n)
     left_coeff = (right_x * inverse) % n
     right_coeff = (-left_x * inverse) % n
     return paillier_add(
@@ -397,24 +396,19 @@ def paillier_interpolate_at_zero(
     )
 
 
-def _encode_ciphertext_bucket(ciphertexts: Sequence[int], ciphertext_size: int) -> bytes:
-    return b"".join(ciphertext.to_bytes(ciphertext_size, "big") for ciphertext in ciphertexts)
+def _encode_ciphertext(ciphertext: int, ciphertext_size: int) -> bytes:
+    return ciphertext.to_bytes(ciphertext_size, "big")
 
 
-def _decode_ciphertext_bucket(
+def _decode_ciphertext(
     value: bytes,
     *,
     ciphertext_size: int,
-    bucket_capacity: int,
     modulus_squared: int,
-) -> tuple[int, ...]:
-    expected_size = ciphertext_size * bucket_capacity
-    if len(value) != expected_size:
-        raise ValueError(f"bucket value has size {len(value)}, expected {expected_size}")
-    return tuple(
-        int.from_bytes(value[offset : offset + ciphertext_size], "big") % modulus_squared
-        for offset in range(0, expected_size, ciphertext_size)
-    )
+) -> int:
+    if len(value) != ciphertext_size:
+        raise ValueError(f"ciphertext value has size {len(value)}, expected {ciphertext_size}")
+    return int.from_bytes(value, "big") % modulus_squared
 
 
 def run_protocol3_server(

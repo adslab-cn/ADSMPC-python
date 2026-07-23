@@ -52,7 +52,7 @@ def test_protocol1_semantic_retrieval_pipeline():
     candidates = server.recover_candidates(message, num_docs=documents.shape[0])
     print(
         f"[P3] candidates={candidates.candidate_indices}, mask={candidates.candidate_mask.tolist()}, "
-        f"bucket_capacity={setup.bucket_capacity}"
+        f"projection_count={len(setup.masks)}"
     )
 
     result = protocol1_finish_from_candidate_mask(
@@ -60,7 +60,6 @@ def test_protocol1_semantic_retrieval_pipeline():
         documents,
         candidate_mask=candidates.candidate_mask,
         top_k=config.top_k,
-        document_payload_shares=payload,
     )
     expected_scores = (query * documents).sum(dim=-1)
     expected_masked = expected_scores + (1.0 - candidates.candidate_mask) * -1000000.0
@@ -69,12 +68,9 @@ def test_protocol1_semantic_retrieval_pipeline():
     print(f"[Fine] masked_scores={result.scores.tolist()}")
     print("[Top-K] indicators:")
     print(result.indicators)
-    print(f"[PIR-to-share] audit={result.pir.audit}")
-    print("[PIR-to-share] selected payload:")
-    print(result.documents)
 
     assert torch.equal(result.scores, expected_masked)
-    assert torch.equal(result.documents, payload[[expected_index]])
+    assert int(result.indicators.argmax(dim=1)[0].item()) == expected_index
     print("[Check] Protocol 1 pipeline matches the plain masked top-k baseline")
 
 

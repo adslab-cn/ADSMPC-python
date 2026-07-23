@@ -147,7 +147,7 @@ def audit_protocol3_oblivious_filter():
     plain_candidates = protocol3_plain_projection_candidates(document_bits, query_bits, setup)
     print(
         f"[Public setup] masks={len(setup.masks)}, projection_weight={setup.projection_weight}, "
-        f"bucket_capacity={setup.bucket_capacity}, ciphertext_size={setup.ciphertext_size}"
+        f"ciphertext_size={setup.ciphertext_size}"
     )
     print(f"[Plain expected] projected-match candidates={plain_candidates}")
     print(f"[Secret map/audit only] server secret->doc count={len(server._secret_to_document)}")
@@ -155,20 +155,20 @@ def audit_protocol3_oblivious_filter():
     first_mask = setup.masks[0]
     doc_key = protocol3_projection_key(tuple(document_bits[0].tolist()), first_mask, mask_id=0)
     query_key = protocol3_projection_key(tuple(query_bits.tolist()), first_mask, mask_id=0)
-    bucket_value = server.okvs.decode(setup.table, query_key)
-    decoded_bucket = client.okvs.decode(setup.table, query_key)
+    encoded_ciphertext = server.okvs.decode(setup.table, query_key)
+    decoded_ciphertext_bytes = client.okvs.decode(setup.table, query_key)
     decoded_ciphertexts = client.filter_from_bits(query_bits, setup).shuffled_secret_ciphertexts
     print(f"[Projection 0] mask_indices={list(first_mask)}")
     print(f"[Projection 0] server doc-0 key prefix={short_hex(doc_key)}")
     print(f"[Projection 0] client query key prefix={short_hex(query_key)}")
     print(f"[Projection 0] keys_equal={doc_key == query_key}")
-    print(f"[Ciphertext check] encoded OKVS bucket bytes prefix={short_hex(bucket_value)}")
-    print(f"[Ciphertext check] client decoded same bucket={bucket_value == decoded_bucket}")
+    print(f"[Ciphertext check] encoded OKVS ciphertext bytes prefix={short_hex(encoded_ciphertext)}")
+    print(f"[Ciphertext check] client decoded same ciphertext bytes={encoded_ciphertext == decoded_ciphertext_bytes}")
 
     client_state = client.state
     if client_state is None:
         raise AssertionError("client state was not recorded")
-    first_ciphertext = client_state.decoded_buckets[0][0]
+    first_ciphertext = client_state.decoded_ciphertexts[0]
     first_share_plain = server.he.decrypt(first_ciphertext)
     print(f"[Ciphertext check] first Paillier ciphertext={short_hex(first_ciphertext)}")
     print(f"[Decrypt/audit] first Paillier share plaintext={first_share_plain}")
@@ -187,8 +187,8 @@ def audit_protocol3_oblivious_filter():
     assert set(plain_candidates).issubset(set(candidate_indices))
 
     for left, right in itertools.combinations(range(2), 2):
-        left_ct = client_state.decoded_buckets[left][0]
-        right_ct = client_state.decoded_buckets[right][0]
+        left_ct = client_state.decoded_ciphertexts[left]
+        right_ct = client_state.decoded_ciphertexts[right]
         encrypted_secret = paillier_interpolate_at_zero(
             left_ct,
             setup.projection_points[left],

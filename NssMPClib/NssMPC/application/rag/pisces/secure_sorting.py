@@ -85,11 +85,10 @@ def secure_top_k_indicators(
 ) -> Any | SecureTopKResult:
     """Return a [k, num_items] indicator matrix using the Pisces top-k path.
 
-    This intentionally does not expose multiple strategy switches. The closest
-    currently implemented path to the paper is Panther ApproxTopK followed by
-    exact top-k over the bin winners. The remaining gap is the lack of Panther's
-    GC backend; comparisons are executed with NssMPClib's available ASS
-    comparison backend.
+    Plain tensors use the local data-independent Panther-style reference path.
+    Arithmetic-secret-shared scores must use the OpenPanther GC bridge; if that
+    backend is unavailable the paper-level path is not available and this
+    function fails instead of silently falling back to ASS comparisons.
     """
 
     if k < 1:
@@ -98,12 +97,8 @@ def secure_top_k_indicators(
     if k > num_items:
         raise ValueError("k cannot exceed the number of scores")
 
-    if _is_ass(scores) and _panther_gc_topk_enabled():
-        try:
-            return _panther_gc_top_k_indicators(scores, k, return_audit=return_audit)
-        except (FileNotFoundError, RuntimeError, subprocess.SubprocessError):
-            if os.environ.get("PISCES_USE_PANTHER_GC_TOPK") == "1":
-                raise
+    if _is_ass(scores):
+        return _panther_gc_top_k_indicators(scores, k, return_audit=return_audit)
 
     score_items, indicator_items, backend = _make_items(scores)
     pairs = list(zip(score_items, indicator_items))
@@ -361,10 +356,6 @@ def _public_one_hot_ass_indicators(num_items: int) -> list[Any]:
 
 
 def _panther_gc_topk_enabled() -> bool:
-    if os.environ.get("PISCES_DISABLE_PANTHER_GC_TOPK") == "1":
-        return False
-    if os.environ.get("PISCES_USE_PANTHER_GC_TOPK") == "1":
-        return True
     return Path(_panther_gc_topk_binary()).exists()
 
 

@@ -69,7 +69,7 @@ def test_protocol3_oblivious_filter_exact_match_candidate():
     setup = server.build_setup_from_bits(document_bits, chunks=chunks)
     print(
         f"[Setup] masks={len(setup.masks)}, projection_weight={setup.projection_weight}, "
-        f"bucket_capacity={setup.bucket_capacity}, OKVS slots={setup.table.size}, "
+        f"OKVS slots={setup.table.size}, "
         f"value_size={setup.table.value_size}, method={setup.table.method}"
     )
     message = client.filter_from_bits(query_bits, setup)
@@ -83,8 +83,8 @@ def test_protocol3_oblivious_filter_exact_match_candidate():
     print("[Check] exact matching document appears in Protocol 3 candidate set")
 
 
-def test_protocol3_projection_bucket_collisions_recover_all_matches():
-    section("3. Protocol 3 projection bucket collisions")
+def test_protocol3_uses_one_ciphertext_per_projection():
+    section("3. Protocol 3 single-value projection encoding")
     document_bits = torch.tensor(
         [
             [1, 0, 1, 1, 0, 1, 0, 0] * 4,
@@ -96,36 +96,36 @@ def test_protocol3_projection_bucket_collisions_recover_all_matches():
     query_bits = document_bits[0].clone()
     chunks = ["doc-0", "doc-1", "doc-2"]
     server = Protocol3Server(
-        okvs=BinaryOKVS(expansion=3.0, seed=b"protocol3-bucket-okvs"),
+        okvs=BinaryOKVS(expansion=3.0, seed=b"protocol3-single-okvs"),
         he=AdditivePaillier(key_size=64),
         threshold=2,
         projection_count=8,
-        seed=b"protocol3-bucket-test",
+        seed=b"protocol3-single-test",
     )
-    client = Protocol3Client(okvs=server.okvs, shuffle_seed=b"protocol3-bucket-client-test")
+    client = Protocol3Client(okvs=server.okvs, shuffle_seed=b"protocol3-single-client-test")
 
-    print("[Input] doc-0 and doc-1 have identical SimHash bits, so every matching projection key has a bucket collision.")
-    print("[Expected] Fixed-size ciphertext buckets preserve both documents without revealing doc ids to the client.")
+    print("[Input] doc-0 and doc-1 collide on every projection key.")
+    print("[Expected] Protocol 3 stores one ciphertext per projection key, so client sends C(8,2)=28 interpolations.")
     setup = server.build_setup_from_bits(document_bits, chunks=chunks)
-    plain_candidates = protocol3_plain_projection_candidates(document_bits, query_bits, setup)
     message = client.filter_from_bits(query_bits, setup)
     candidates = server.recover_candidates(message)
-    candidate_indices = tuple(sorted(candidate.index for candidate in candidates))
     candidate_chunks = [candidate.chunk for candidate in candidates]
+    expected_ciphertexts = len(setup.masks) * (len(setup.masks) - 1) // 2
     print(
-        f"[Setup] bucket_capacity={setup.bucket_capacity}, ciphertext_size={setup.ciphertext_size}, "
-        f"client decoded ciphertexts={len(client.state.decoded_ciphertexts)}"
+        f"[Setup] projection_collision_count={setup.projection_collision_count}, "
+        f"decoded_projection_ciphertexts={len(client.state.decoded_ciphertexts)}"
     )
-    print(f"[Plain reference] candidates={plain_candidates}")
-    print(f"[Protocol 3] candidates={candidate_chunks}")
+    print(f"[Client] encrypted interpolation count={len(message.shuffled_secret_ciphertexts)}")
+    print(f"[Server] candidates={candidate_chunks}")
 
-    assert setup.bucket_capacity >= 2
-    assert candidate_indices == plain_candidates
-    print("[Check] bucketed OKVS recovers every plain projected-match candidate")
+    assert setup.projection_collision_count > 0
+    assert len(message.shuffled_secret_ciphertexts) == expected_ciphertexts
+    assert len(candidate_chunks) == 1
+    print("[Check] single-value projection encoding reduces combinations to projection pairs")
 
 
 if __name__ == "__main__":
     test_paillier_interpolation_recovers_shamir_secret()
     test_protocol3_oblivious_filter_exact_match_candidate()
-    test_protocol3_projection_bucket_collisions_recover_all_matches()
+    test_protocol3_uses_one_ciphertext_per_projection()
     print("pisces protocol3 tests ok")
